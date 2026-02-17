@@ -8,34 +8,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    libgl1 \
+    libgl1 \                
     libglib2.0-0 \
-    gcc \
-    git \
+    libssl-dev \
+    libopencv-dev \
+    ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Définir le répertoire de travail
 WORKDIR /app
 
-# Copier les requirements
+# Copier le fichier requirements.txt en premier pour profiter du cache Docker
 COPY requirements.txt .
 
-# Nettoyer pip cache et réinstaller proprement
+# Mettre à jour pip et installer les dépendances Python
 RUN pip install --upgrade pip setuptools wheel && \
     pip cache purge && \
     pip install -r requirements.txt --no-cache-dir
 
-# Copier le code application
+# Télécharger le modèle PoseLandmarker de MediaPipe (version "full")
+# Le fichier sera placé à la racine de /app, accessible en lecture par l'application
+RUN curl -L -o /app/pose_landmarker.task \
+    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
+
+# (Optionnel) Vérifier que le modèle a bien été téléchargé
+RUN ls -lh /app/pose_landmarker.task
+
+# Copier le code applicatif
 COPY app.py .
 COPY smpl_engine.py .
 COPY utils/ ./utils/
 COPY models/ ./models/
 
-# Exposer le port
+# Exposer le port utilisé par Flask
 EXPOSE 5000
 
-# Healthcheck
+# Healthcheck (nécessite curl installé)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 

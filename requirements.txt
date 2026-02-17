@@ -3,15 +3,21 @@ flask==3.0.0
 flask-cors==4.0.0
 requests==2.31.0
 
-# Image Processing (stable versions)
+# Image Processing
 opencv-python==4.8.0.76
 Pillow==10.0.0
 
-# Numeric & Scientific
 # Numeric & Scientific
 numpy==1.26.4
 scipy==1.12.0
 scikit-image==0.22.0
 
-# MediaPipe (use available 0.10.x version)
+# Protobuf compatible with MediaPipe
+protobuf==3.20.3
+
+# MediaPipe
 mediapipe==0.10.32
+
+# Deep Learning & 3D Body Models
+torch==2.0.1
+smplx==0.1.28
