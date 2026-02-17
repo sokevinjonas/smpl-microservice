@@ -1,0 +1,17 @@
+# Web Framework
+flask==3.0.0
+flask-cors==4.0.0
+requests==2.31.0
+
+# Image Processing (stable versions)
+opencv-python==4.8.0.76
+Pillow==10.0.0
+
+# Numeric & Scientific
+# Numeric & Scientific
+numpy==1.26.4
+scipy==1.12.0
+scikit-image==0.22.0
+
+# MediaPipe (use available 0.10.x version)
+mediapipe==0.10.32

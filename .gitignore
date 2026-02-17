@@ -1,0 +1,75 @@
+# Configuration .gitignore
+
+# Dossiers et fichiers système
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Flask
+instance/
+.webassets-cache
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Modèles pré-entraînés (trop volumineux)
+models/*.pkl
+models/*.pth
+models/*.pt
+models/SMPL*
+models/*.zip
+
+# Données temporaires
+tmp/
+temp/
+*.tmp
+*.log
+logs/
+
+# Images téléchargées
+*.jpg
+*.jpeg
+*.png
+*.gif
+!test_images/
+
+# Fichiers de configuration locaux
+.env
+.env.local
+config.local.py
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docker
+.dockerignore

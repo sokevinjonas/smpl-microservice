@@ -1,0 +1,5 @@
+# Dossier pour stocker les modèles pré-entraînés
+# Placez les fichiers suivants ici:
+# - SMPL_NEUTRAL.pkl (depuis https://smpl.is.tue.mpg.de/)
+# - HMR/SPIN checkpoint (depuis https://github.com/nkolot/3DHumanPose)
+# - Autres modèles pré-entraînés
