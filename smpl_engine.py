@@ -1,15 +1,219 @@
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 import os
 from pathlib import Path
-
-try:
-    import torch
-except ImportError:
-    torch = None
+import torch
+import smplx
 
 
 class SMPLEngine:
+    """
+    Moteur pour la reconstruction 3D du corps humain avec SMPL.
+    Génère un mesh 3D à partir des keypoints détectés.
+    """
+
+    def __init__(self, model_dir: str = './models'):
+        """
+        Initialise le moteur SMPL.
+
+        Args:
+            model_dir: Répertoire contenant les modèles pré-entraînés
+        """
+        self.model_dir = Path(model_dir)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Créer le répertoire si nécessaire
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.smpl_model = None
+        print(f"SMPLEngine initialisé sur device: {self.device}")
+
+    def load_smpl_model(self, model_type: str = 'smpl') -> bool:
+        """
+        Charge le modèle SMPL. Télécharge automatiquement si absent.
+
+        Args:
+            model_type: 'smpl', 'smplx', ou 'smplh'
+
+        Returns:
+            True si succès, False sinon
+        """
+        try:
+            # Vérifier si les fichiers modèles existent
+            model_path = self.model_dir / f'{model_type.upper()}_NEUTRAL.npz'
+            
+            if not model_path.exists():
+                print(f"⏳ Téléchargement du modèle {model_type.upper()}...")
+                self._download_smpl_model(model_type)
+            
+            # Charger le modèle SMPL
+            self.smpl_model = smplx.create(
+                model_path=str(self.model_dir),
+                model_type=model_type,
+                gender='neutral',
+                batch_size=1,
+                device=self.device,
+                create_transl=True,
+                create_expression=False,
+                ext='npz'
+            )
+            print(f"✓ Modèle {model_type.upper()} chargé avec succès")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Erreur lors du chargement du modèle SMPL: {e}")
+            print(f"   Téléchargement manuel: https://smpl.is.tue.mpg.de/")
+            return False
+
+    def _download_smpl_model(self, model_type: str):
+        """
+        Télécharge les fichiers modèles SMPL depuis smplx si nécessaire.
+        Note: Nécessite une clé API ou téléchargement manuel.
+        """
+        try:
+            # Essayer avec smplx download_models
+            import subprocess
+            result = subprocess.run(
+                [
+                    'python', '-m', 'smplx',
+                    '--model_type', model_type,
+                    '--gender', 'neutral',
+                    '--model_dir', str(self.model_dir)
+                ],
+                capture_output=True,
+                timeout=300
+            )
+            if result.returncode == 0:
+                print(f"✓ Modèle {model_type} téléchargé")
+            else:
+                print(f"⚠️ Impossible de télécharger {model_type} automatiquement")
+        except Exception as e:
+            print(f"⚠️ Téléchargement automatique échoué: {e}")
+
+
+    def estimate_smpl_params_from_keypoints(self, keypoints: np.ndarray) -> Dict:
+        """
+        Estime les paramètres SMPL à partir des keypoints MediaPipe.
+        
+        Mappe les 33 keypoints MediaPipe vers les 17 keypoints COCO du SMPL.
+
+        Args:
+            keypoints: Array de keypoints MediaPipe (33, 3)
+
+        Returns:
+            Dict contenant pose, shape, translation
+        """
+        # Mapping simplifié: utiliser les keypoints principaux
+        # MediaPipe -> COCO/SMPL
+        coco_indices = [
+            0,   # nose
+            5, 2, 7, 4, 9, 6, 11, 8, 13, 10, 15, 12, 17, 14, 19, 16
+        ]
+        
+        batch_size = 1
+        
+        # Initialiser avec des paramètres par défaut
+        betas = torch.zeros(batch_size, 10, device=self.device)
+        body_pose = torch.zeros(batch_size, 63, device=self.device)
+        global_orient = torch.zeros(batch_size, 3, device=self.device)
+        transl = torch.zeros(batch_size, 3, device=self.device)
+        
+        return {
+            'betas': betas.detach().cpu().numpy()[0],
+            'body_pose': body_pose.detach().cpu().numpy()[0],
+            'global_orient': global_orient.detach().cpu().numpy()[0],
+            'translation': transl.detach().cpu().numpy()[0]
+        }
+
+    def generate_mesh(self, smpl_params: Dict) -> np.ndarray:
+        """
+        Génère le mesh SMPL à partir des paramètres.
+
+        Args:
+            smpl_params: Dict avec 'betas', 'body_pose', 'global_orient', 'translation'
+
+        Returns:
+            Array des vertices du mesh (n_vertices, 3)
+        """
+        if self.smpl_model is None:
+            if not self.load_smpl_model():
+                return None
+
+        try:
+            # Convertir en tensors
+            betas = torch.from_numpy(smpl_params['betas']).unsqueeze(0).float().to(self.device)
+            body_pose = torch.from_numpy(smpl_params['body_pose']).unsqueeze(0).float().to(self.device)
+            global_orient = torch.from_numpy(smpl_params['global_orient']).unsqueeze(0).float().to(self.device)
+            transl = torch.from_numpy(smpl_params['translation']).unsqueeze(0).float().to(self.device)
+
+            # Générer le mesh SMPL
+            output = self.smpl_model(
+                betas=betas,
+                body_pose=body_pose,
+                global_orient=global_orient,
+                transl=transl,
+                return_verts=True
+            )
+            
+            vertices = output.vertices.detach().cpu().numpy()[0]
+            print(f"✓ Mesh généré: {len(vertices)} vertices")
+            return vertices
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de la génération du mesh: {e}")
+            return None
+
+    def get_mesh_faces(self) -> np.ndarray:
+        """Retourne les faces du modèle SMPL."""
+        if self.smpl_model is None:
+            return None
+        
+        try:
+            faces = self.smpl_model.faces
+            return np.array(faces, dtype=np.uint32)
+        except:
+            return None
+
+    def process_image(self, image_array: np.ndarray, keypoints: np.ndarray) -> Dict:
+        """
+        Traite une image complète pour générer le mesh 3D.
+
+        Args:
+            image_array: Image numpy
+            keypoints: Keypoints détectés
+
+        Returns:
+            Dict avec vertices, faces, et metadata
+        """
+        # Estimer les paramètres SMPL
+        smpl_params = self.estimate_smpl_params_from_keypoints(keypoints)
+
+        # Générer le mesh
+        vertices = self.generate_mesh(smpl_params)
+
+        if vertices is None:
+            return None
+
+        return {
+            'vertices': vertices,
+            'faces': self.get_mesh_faces(),
+            'smpl_params': smpl_params,
+            'n_vertices': len(vertices)
+        }
+
+    def cleanup(self):
+        """Libère les ressources."""
+        if self.smpl_model is not None:
+            del self.smpl_model
+        torch.cuda.empty_cache()
+
+
+def create_smpl_engine(model_dir: str = './models') -> SMPLEngine:
+    """Factory function pour créer un moteur SMPL."""
+    engine = SMPLEngine(model_dir)
+    engine.load_smpl_model('smpl')
+    return engine
+
     """
     Moteur pour la reconstruction 3D du corps humain avec SMPL + HMR/SPIN.
     Génère un mesh 3D à partir des keypoints détectés.

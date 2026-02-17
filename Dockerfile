@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopencv-dev \
     ffmpeg \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Définir le répertoire de travail
@@ -27,12 +28,26 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip cache purge && \
     pip install -r requirements.txt --no-cache-dir
 
-# Télécharger le modèle PoseLandmarker de MediaPipe (version "full")
-# Le fichier sera placé à la racine de /app, accessible en lecture par l'application
-RUN curl -L -o /app/pose_landmarker.task \
-    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
+# Créer le répertoire models
+RUN mkdir -p /app/models
 
-# (Optionnel) Vérifier que le modèle a bien été téléchargé
+# Télécharger le modèle PoseLandmarker de MediaPipe
+RUN curl -L -o /app/pose_landmarker.task \
+    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task || true
+
+# Copier le setup script
+COPY setup_models.py .
+
+# Copier le code application
+COPY app.py .
+COPY smpl_engine.py .
+COPY utils/ ./utils/
+
+# Exposer le port
+EXPOSE 5000
+
+# Entrypoint: setup modèles puis démarrer l'app
+ENTRYPOINT ["sh", "-c", "python setup_models.py && python app.py"]
 RUN ls -lh /app/pose_landmarker.task
 
 # Copier le code applicatif

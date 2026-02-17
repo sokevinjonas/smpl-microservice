@@ -7,19 +7,16 @@ services:
     ports:
       - "5000:5000"
     volumes:
+      # Code source - monté en temps réel (pas besoin de rebuild!)
+      - ./app.py:/app/app.py
+      - ./smpl_engine.py:/app/smpl_engine.py
+      - ./utils:/app/utils
+      # Modèles (lecture seule)
       - ./models:/app/models:ro
+      # Logs
       - ./logs:/app/logs
     environment:
-      - FLASK_ENV=production
-      - PYTHONUNBUFFERED=1
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-    networks:
+      - FLASK_ENV=development
       - smpl-network
 
 networks:
