@@ -199,12 +199,34 @@ def load_image(image_path: str) -> Tuple[np.ndarray, Tuple[int, int]]:
     Returns:
         Tuple (image numpy, (height, width))
     """
+    # Nettoyer les URLs dupliquées (e.g., "httpshttps://" → "https://")
+    image_path = _normalize_url(image_path)
+    
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"Impossible de charger l'image: {image_path}")
 
     height, width = image.shape[:2]
     return image, (height, width)
+
+
+def _normalize_url(url: str) -> str:
+    """
+    Normalise une URL (corrige les doublons, etc.).
+    
+    Args:
+        url: URL ou chemin
+        
+    Returns:
+        URL/chemin normalisé
+    """
+    # Corriger les doublons de protocole (httpshttps:// → https://)
+    url = url.replace('httpshttps://', 'https://')
+    url = url.replace('httphttps://', 'https://')
+    url = url.replace('httphttp://', 'http://')
+    
+    return url
+
 
 
 def download_image(image_url: str, save_path: str) -> str:
@@ -221,6 +243,9 @@ def download_image(image_url: str, save_path: str) -> str:
     import requests
     from pathlib import Path
 
+    # Normaliser l'URL
+    image_url = _normalize_url(image_url)
+    
     try:
         response = requests.get(image_url, timeout=10)
         response.raise_for_status()
@@ -232,6 +257,7 @@ def download_image(image_url: str, save_path: str) -> str:
         return save_path
     except Exception as e:
         raise RuntimeError(f"Erreur lors du téléchargement de l'image: {e}")
+
 
 
 def validate_image(image: np.ndarray) -> bool:
