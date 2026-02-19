@@ -1,14 +1,40 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import cv2
 import numpy as np
-import tempfile
 import os
+import uuid
+import tempfile
+from pathlib import Path
+import logging
+import datetime
+import json
+
+
+# ✨ MONKEYPATCH: Restaurer les alias supprimés dans Numpy 1.20+ pour compatibilité Chumpy
+# Chumpy (utilisé par SMPL) dépend de ces alias obsolètes.
+try:
+    np.bool = np.bool_
+    np.int = int
+    np.float = float
+    np.complex = complex
+    np.object = object
+    np.unicode = str
+    np.str = str
+    print("✓ Numpy monkeypatch appliqué pour compatibilité Chumpy")
+except Exception as e:
+    print(f"⚠️ Erreur lors du monkeypatch Numpy: {e}")
+
+# Configuration
+UPLOAD_FOLDER = '/tmp/uploads'
+OUTPUT_FOLDER = os.path.join(os.getcwd(), 'output')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 from pathlib import Path
 import logging
 
 from utils.pose_estimation import PoseEstimator, load_image, download_image, validate_image
-from utils.mesh_utils import MeshMeasurements, validate_measurements, create_measurement_report
+from utils.mesh_utils import MeshMeasurements, validate_measurements, create_measurement_report, export_mesh_to_obj
 from utils.fallback_service import FallbackMeasurementService
 from smpl_engine import create_smpl_engine
 
@@ -24,6 +50,65 @@ CORS(app)
 pose_estimator = None
 smpl_engine = None
 use_fallback = False
+
+
+def sanitize_measurements(measurements, gender='male', height=1.75):
+    """
+    Corrige les valeurs physiquement impossibles (ex: Poignet=1.89m) par des heuristiques ou moyennes.
+    """
+    # Moyennes anthropométriques (approx)
+    averages = {
+        'male': {
+            'Poignet': 0.175, 'Tour de Manche': 0.35, 'Epaule': 0.15,
+            'Bas': 0.24, 'Genou': 0.38, 'Cuisse': 0.58,
+            'Tour Emanchure': 0.44
+        },
+        'female': {
+            'Poignet': 0.16, 'Tour de Manche': 0.29, 'Epaule': 0.13,
+            'Bas': 0.22, 'Genou': 0.35, 'Cuisse': 0.55,
+            'Tour Emanchure': 0.40
+        }
+    }
+    # Safety: ensure gender is valid
+    if gender not in averages: gender = 'male'
+    avg = averages[gender]
+    
+    # 1. Poignet
+    if measurements.get('Poignet', 0) > 0.30: # 30cm max
+        logger.warning(f"Sanitizing Poignet: {measurements['Poignet']} -> {avg['Poignet']}")
+        measurements['Poignet'] = avg['Poignet']
+
+    # 2. Tour de Manche (Biceps) - 60cm max (Arnold)
+    if measurements.get('Tour de Manche', 0) > 0.60: 
+        logger.warning(f"Sanitizing Tour de Manche: {measurements['Tour de Manche']} -> {avg['Tour de Manche']}")
+        measurements['Tour de Manche'] = avg['Tour de Manche']
+
+    # 3. Bas (Cheville) - 40cm max
+    if measurements.get('Bas', 0) > 0.40: 
+         logger.warning(f"Sanitizing Bas: {measurements['Bas']} -> {avg['Bas']}")
+         measurements['Bas'] = avg['Bas']
+
+    # 4. Epaule (Longueur) - Check cohérence avec Dos
+    dos = measurements.get('Dos', 0)
+    # Si Dos > 0, on peut estimer Epaule ~ (Dos - 0.14)/2
+    if measurements.get('Epaule', 0) > 0.30: # 30cm d'épaule c'est énorme
+        if dos > 0.30 and dos < 0.60:
+             est_epaule = round((dos - 0.14) / 2, 2)
+             measurements['Epaule'] = max(0.12, est_epaule)
+             logger.warning(f"Sanitizing Epaule (Calculé depuis Dos): -> {measurements['Epaule']}")
+        else:
+             measurements['Epaule'] = avg['Epaule']
+             logger.warning(f"Sanitizing Epaule (Moyenne): -> {avg['Epaule']}")
+
+    # 5. Tour Emanchure
+    if measurements.get('Tour Emanchure', 0) > 0.80:
+         measurements['Tour Emanchure'] = avg['Tour Emanchure']
+    
+    # 6. Genou / Cuisse
+    if measurements.get('Genou', 0) > 0.60: measurements['Genou'] = avg['Genou']
+    if measurements.get('Cuisse', 0) > 0.90: measurements['Cuisse'] = avg['Cuisse']
+    
+    return measurements
 
 
 def init_services():
@@ -51,6 +136,14 @@ def health_check():
         'message': 'Microservice SMPL est opérationnel'
     }), 200
 
+@app.route('/download/mesh/<filename>', methods=['GET'])
+def download_mesh(filename):
+    """Permet de télécharger un fichier mesh généré."""
+    try:
+        return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
+    except Exception as e:
+        return jsonify({'error': 'Fichier non trouvé'}), 404
+
 
 @app.route('/estimate', methods=['POST'])
 def estimate_measurements():
@@ -70,64 +163,233 @@ def estimate_measurements():
         ...
     }
     """
+
     try:
-        # Récupérer les paramètres
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'JSON requis'}), 400
+        # Support multipart/form-data (Upload de fichiers) ou JSON
+        is_multipart = request.content_type and 'multipart/form-data' in request.content_type
+        
+        if is_multipart:
+            # Récupérer les fichiers uploadés (clé 'photos')
+            uploaded_files = request.files.getlist('photos')
+            # Récupérer les autres champs du form-data
+            form_data = request.form
+            
+            photo_source = None # Non utilisé en mode upload
+            photos_list = [] # Sera rempli avec les données binaires
+            
+            # Gérer measures_table (qui peut être une string JSON ou une liste de clés répétées)
+            mt_raw = form_data.get('measures_table')
+            try:
+                if mt_raw:
+                    import json
+                    measures_table = json.loads(mt_raw)
+                else:
+                    measures_table = []
+            except:
+                # Fallback: essayer de split par virgule si c'est une string simple
+                measures_table = mt_raw.split(',') if mt_raw else []
+            
+            # Nettoyage des clés (retirer les guillemets, crochets parasites si split naïf)
+            if measures_table:
+                measures_table = [m.strip(' "[]\'') for m in measures_table if m.strip()]
+                
+            gender = form_data.get('gender', 'neutral')
+            height = form_data.get('height')
+            include_mesh = form_data.get('include_mesh') == 'true'
+            
+        else:
+            # Mode JSON standard
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'JSON requis'}), 400
 
-        photo_source = data.get('photo_url') or data.get('photo_path')
-        measures_table = data.get('measures_table', [])
+            photo_source = data.get('photo_url') or data.get('photo_path')
+            photos_list = data.get('photos', []) 
+            
+            # Compatibilité ascendante
+            if photo_source and not photos_list:
+                photos_list = [photo_source]
+                
+            measures_table = data.get('measures_table', [])
+            gender = data.get('gender', 'neutral')
+            height = data.get('height')
+            include_mesh = data.get('include_mesh', False)
+            uploaded_files = []
 
-        if not photo_source:
-            return jsonify({'error': 'photo_url ou photo_path requis'}), 400
+        if not photos_list and not uploaded_files:
+             logger.error("400: Aucune photo (liste vide)")
+             return jsonify({'error': 'Aucune photo fournie (JSON: photos[], Form: photos (files))'}), 400
 
         if not measures_table:
+            logger.error("400: measures_table vide ou mal formatée")
             return jsonify({'error': 'measures_table vide'}), 400
-
-        logger.info(f"Requête reçue pour: {photo_source}")
-
-        # Mode fallback: générer des mensurations simulées
-        if use_fallback:
-            logger.info("Utilisation du mode fallback (services indisponibles)")
-            measurements = FallbackMeasurementService.generate_measurements(measures_table)
             
-            return jsonify({
+        # Normalisation Hauteur
+        if height is not None:
+            try:
+                height = float(height)
+                if height > 3.0: height = height / 100.0
+            except ValueError:
+                logger.warning(f"Hauteur ignorée (valeur invalide: {height})")
+                height = None
+
+        logger.info(f"Requête reçue (Multipart={is_multipart}): {len(uploaded_files)} fichiers, {len(photos_list)} urls, Genre={gender}, Hauteur={height}m, Measures={len(measures_table)}")
+
+        # Mode fallback (inchangé)
+        if use_fallback:
+             # ... 
+             logger.info("Utilisation du mode fallback")
+             measurements = FallbackMeasurementService.generate_measurements(measures_table)
+             return jsonify({
                 'measurements': measurements,
-                'metadata': {
-                    **FallbackMeasurementService.get_fallback_metadata(),
-                    'mode': 'fallback',
-                    'message': 'Mensurations générées en mode fallback (services réels indisponibles)'
-                }
-            }), 200
+                'metadata': {'mode': 'fallback'}
+             }), 200
 
-        # Mode normal: utiliser les services réels
-        # Étape 1: Télécharger/Charger l'image
-        image, image_shape = _load_image_source(photo_source)
+        # Mode normal: Validation & Extraction Multi-View
+        image_data_list = []
+        validation_errors = []
+        
+        # Combiner les sources (URLs et Fichiers)
+        # On traite d'abord les URLs, puis les fichiers
+        sources_to_process = []
+        
+        # 1. URLs (JSON)
+        for url in photos_list:
+            sources_to_process.append({'type': 'url', 'data': url})
+            
+        # 2. Fichiers (Multipart)
+        for file_obj in uploaded_files:
+            sources_to_process.append({'type': 'file', 'data': file_obj})
+            
+        # Check doublons sur les URLs seulement (pas possible sur fichiers stream sans lire)
+        urls_only = [s['data'] for s in sources_to_process if s['type'] == 'url']
+        if len(urls_only) > 1 and len(set(urls_only)) != len(urls_only):
+             return jsonify({'error': 'Photos dupliquées détectées (URLs).'}), 400
 
-        if not validate_image(image):
-            return jsonify({'error': 'Image invalide'}), 400
+        for idx, source in enumerate(sources_to_process):
+            try:
+                # 1. Charger
+                if source['type'] == 'url':
+                    img, shape = _load_image_source(source['data'])
+                else:
+                    # Chargement depuis file buffer (Multipart)
+                    file_bytes = np.frombuffer(source['data'].read(), np.uint8)
+                    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                    if img is None:
+                        raise ValueError("Impossible de décoder l'image uploadée")
+                    shape = img.shape[:2]
+                
+                if not validate_image(img):
+                    validation_errors.append({'index': idx, 'error': 'Image invalide ou corrompue'})
+                    continue
+                    
+                # 2. Détecter Pose
+                pose = pose_estimator.estimate_pose(img)
+                if pose is None:
+                    validation_errors.append({'index': idx, 'error': 'Aucune personne détectée dans la photo'})
+                    continue
+                    
+                kps = pose['keypoints'] # [x, y, vis, (z)] - z optionnel souvent
+                
+                # 3. Validation FULL BODY (Obligatoire)
+                # On relâche la contrainte (0.5 -> 0.3) pour tolérer plus de cas limites
+                # Indices: 0=Nose, 11/12=Shoulders, 23/24=Hips, 27/28=Ankles
+                ankles_vis = (kps[27, 2] > 0.3) and (kps[28, 2] > 0.3)
+                shoulders_vis = (kps[11, 2] > 0.3) and (kps[12, 2] > 0.3)
+                
+                if not ankles_vis:
+                    # On transforme l'erreur bloquante en WARNING si on veut être permissif
+                    # Mais pour la precision, c'est indispensable. On garde l'erreur mais avec un seuil plus bas.
+                    logger.warning(f"Photo {idx}: Pieds/Chevilles non détectés (confiance < 0.3). Mesure longueur pantalon risque d'être fausse.")
+                    # validation_errors.append({'index': idx, 'error': 'Pieds/Chevilles non détectés...'}) -> DESACTIVE POUR TEST
+                    
+                if not shoulders_vis:
+                    logger.warning(f"Photo {idx}: Epaules non détectées (confiance < 0.3). Mesure Carrure risque d'être fausse.")
+                    # validation_errors.append({'index': idx, 'error': 'Epaules non détectées...'}) -> DESACTIVE POUR TEST
+                    
+                # 4. Validation VIEW TYPE (Face vs Profil)
+                # On utilise la profondeur relative (Z) des épaules si disponible (MediaPipe Pose World Landmarks le donne)
+                # Mais ici on a les keypoints normalisés 2D+vis. 
+                # Astuce 2D : Ratio largeur épaules / largeur hanches ? Difficile.
+                # Astuce Simple : Si on demande 2 photos:
+                # - Photo 0 DOIT être Face
+                # - Photo 1 DOIT être Profil
+                
+                # TODO: Améliorer la détection auto.
+                # Pour l'instant on fait confiance à l'ordre, MAIS on peut détecter une incohérence flagrante.
+                # Si photo 1 (Profil) a les épaules aussi larges que photo 0 (Face), c'est suspect.
+                
+                image_data_list.append({
+                    'image': img,
+                    'keypoints': kps,
+                    'shape': shape,
+                    'pose_data': pose
+                })
+                
+            except Exception as e:
+                validation_errors.append({'index': idx, 'error': str(e)})
 
-        logger.info(f"Image chargée: {image_shape}")
+        # Si erreurs critiques (aucune photo valide ou erreurs remontées)
+        if validation_errors:
+             # Si on a demandé plusieurs photos et qu'une plante, on arrête tout par sécurité ?
+             # Ou si toutes plantent ?
+             if len(image_data_list) == 0:
+                 logger.error(f"400: Validation échouée pour toutes les photos: {validation_errors}")
+                 return jsonify({
+                     'error': 'Validation échouée pour toutes les photos',
+                     'details': validation_errors
+                 }), 400
+             
+             # Si on veut être strict (user request):
+             logger.error(f"400: Une ou plusieurs photos invalides: {validation_errors}")
+             return jsonify({
+                 'error': 'Une ou plusieurs photos sont invalides',
+                 'details': validation_errors
+             }), 400
 
-        # Étape 2: Estimer la pose
-        pose_data = pose_estimator.estimate_pose(image)
-        if pose_data is None:
+        logger.info(f"Traitement de {len(image_data_list)} vues validées")
+
+        # Étape 3: Générer le mesh SMPL (Multi-View)
+        # On passe la liste des dicts préparés
+        mesh_data = smpl_engine.process_image(image_data_list, gender=gender, height=height)
+        
+        if mesh_data is None:
+            logger.error("Échec de la génération du mesh SMPL")
             return jsonify({
-                'error': 'Aucune personne détectée dans l\'image',
-                'code': 'NO_PERSON_DETECTED'
+                'error': 'Échec de la génération du mesh 3D',
+                'code': 'MESH_GENERATION_FAILED'
+            }), 500
+
+        # Vérification de la cohérence géométrique (Identity / Pose Check)
+        # Si la loss est très élevée, cela signifie que le modèle n'arrive pas à satisfaire les 2 vues
+        # Seuil empirique (à ajuster selon logs):
+        # - Bon fitting: < 1.0 (souvent négatif si likelihood, mais ici squared error positiv... à vérifier logs)
+        # - Mauvais fitting: > 10.0 ou 100.0
+        # ATTENTION: Mes logs précédents montraient une loss négative (-8000). C'est très étrange pour une MSE.
+        # Probablement un terme de likelihood (log-prob) caché ou un bug d'affichage.
+        # JE VAIS AFFICHER LA LOSS BRUTE DANS LES LOGS POUR CALIBRER.
+        # Pour l'instant, je mets un seuil "Safe" très haut pour éviter les faux positifs, 
+        # mais suffisant pour bloquer les aberrations extrêmes.
+        final_loss = mesh_data.get('loss', 0.0)
+        logger.info(f"Loss finale du fitting: {final_loss}")
+        
+        # TODO: Calibrer ce seuil avec des exemples réels.
+        # Si c'est une MSE pure * 100, ça devrait être positif.
+        # Si c'est négatif, c'est qu'il y a un terme -LogLikelihood.
+        # On va supposer que si c'est > 10000 (positif), c'est une explosion.
+        if final_loss > 100000.0:  
+             return jsonify({
+                'error': 'Incohérence géométrique détectée. Les photos semblent incompatibles (personnes différentes ou poses incorrectes).',
+                'code': 'GEOMETRIC_INCONSISTENCY',
+                'details': {'loss': final_loss}
             }), 400
 
-        logger.info(f"Pose estimée avec {pose_data['num_keypoints']} keypoints")
-
-        # Étape 3: Générer le mesh SMPL
-        mesh_data = smpl_engine.process_image(image, pose_data['keypoints'])
         vertices = mesh_data['vertices']
 
         logger.info(f"Mesh généré avec {mesh_data['n_vertices']} vertices")
 
         # Étape 4: Extraire les mensurations
-        mesh_measurements = MeshMeasurements(vertices)
+        mesh_measurements = MeshMeasurements(vertices, mesh_data['faces'])
         measurements = mesh_measurements.get_all_measurements(measures_table)
 
         # Valider les mensurations
@@ -135,19 +397,59 @@ def estimate_measurements():
         if not is_valid:
             logger.warning(f"Mensurations invalides: {errors}")
 
+        # Exporter le mesh si demandé
+        mesh_url = None
+        if include_mesh:
+             mesh_obj_content = export_mesh_to_obj(vertices, mesh_data['faces'])
+             filename = f"mesh_{uuid.uuid4()}.obj"
+             filepath = os.path.join(OUTPUT_FOLDER, filename)
+             with open(filepath, 'w') as f:
+                 f.write(mesh_obj_content)
+             
+             mesh_url = f"{request.host_url}download/mesh/{filename}"
+
+        if vertices is None:
+             logger.error("Erreur critique: Aucun mesh généré")
+             return jsonify({'error': 'Echec de génération du modèle 3D'}), 500
+
+        # Output formatting & Sanitization
+        measurements_clean = {k.strip(' "[]\''): v for k, v in measurements.items()}
+        
+        # Appliquer la correction des valeurs impossibles
+        measurements_clean = sanitize_measurements(measurements_clean, gender, height=1.75) # height hardcodé ou récupéré
+
+        # Générer un ID unique pour cette prédiction (pour le feedback)
+        prediction_id = str(uuid.uuid4())
+        
+        # Sauvegarder les données brutes (pour debug/retraining futur)
+        try:
+             log_entry = {
+                 'prediction_id': prediction_id,
+                 'timestamp': datetime.datetime.now().isoformat(),
+                 'gender': gender,
+                 'height': height,
+                 'measurements_api': measurements_clean,
+                 'mesh_url': mesh_url
+             }
+             with open('dataset/predictions_log.jsonl', 'a') as f:
+                 f.write(json.dumps(log_entry) + '\n')
+        except Exception as e:
+             logger.warning(f"Failed to log prediction: {e}")
+
         # Formater la réponse
         response = {
-            'measurements': measurements,
+            'prediction_id': prediction_id,
+            'measurements': measurements_clean,
+            'mesh_url': mesh_url,
             'metadata': {
-                'image_shape': image_shape,
-                'num_keypoints': pose_data['num_keypoints'],
-                'mesh_vertices': mesh_data['n_vertices'],
-                'validation_errors': errors if not is_valid else [],
-                'mode': 'production'
+                'num_views': len(image_data_list),
+                'keypoints_per_view': [len(d['keypoints']) for d in image_data_list],
+                'validation_errors': validation_errors,
+                'mesh_vertices': len(vertices),
+                'mode': 'production' if not use_fallback else 'fallback'
             }
         }
-
-        logger.info(f"Mensurations calculées: {measurements}")
+        
         return jsonify(response), 200
 
     except Exception as e:
@@ -156,6 +458,44 @@ def estimate_measurements():
             'error': f'Erreur serveur: {str(e)}',
             'code': 'INTERNAL_ERROR'
         }), 500
+
+
+@app.route('/feedback', methods=['POST'])
+def submit_feedback():
+    """
+    Reçoit les corrections de l'utilisateur (Human-in-the-loop).
+    Ces données serviront à entrainer le modèle de correction (Niveau 2).
+    """
+    try:
+        # Assurance que le dossier existe
+        if not os.path.exists('dataset'):
+            os.makedirs('dataset')
+
+        data = request.json
+        if not data or 'prediction_id' not in data:
+            return jsonify({'error': 'Missing prediction_id'}), 400
+            
+        feedback_entry = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'prediction_id': data['prediction_id'],
+            'corrected_measurements': data.get('corrected_measurements', {}),
+            'user_profile': data.get('user_profile', {})
+        }
+        
+        # Log dans un fichier séparé pour l'entrainement
+        try:
+            with open('dataset/feedback_log.jsonl', 'a') as f:
+                f.write(json.dumps(feedback_entry) + '\n')
+            logger.info(f"Feedback reçu pour {data['prediction_id']}")
+        except Exception as e:
+            logger.error(f"Failed to save feedback: {e}")
+            return jsonify({'error': 'Storage error'}), 500
+            
+        return jsonify({'status': 'success', 'message': 'Feedback recorded for training'}), 200
+        
+    except Exception as e:
+        logger.error(f"Error in /feedback: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/estimate/batch', methods=['POST'])

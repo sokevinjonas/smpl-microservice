@@ -6,6 +6,8 @@ services:
     container_name: smpl-microservice
     ports:
       - "5000:5000"
+    networks:
+      - smpl-network
     volumes:
       # Code source - monté en temps réel (pas besoin de rebuild!)
       - ./app.py:/app/app.py
@@ -13,11 +15,11 @@ services:
       - ./utils:/app/utils
       # Modèles (lecture seule)
       - ./models:/app/models:ro
-      # Logs
+      # Logs et Dataset
       - ./logs:/app/logs
+      - ./dataset:/app/dataset
     environment:
       - FLASK_ENV=development
-      - smpl-network
 
 networks:
   smpl-network:

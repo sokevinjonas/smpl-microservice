@@ -1,168 +1,114 @@
 import numpy as np
-from typing import Dict, Optional
-import os
+from typing import Dict
 from pathlib import Path
 import torch
-import smplx
-
+import random
+from typing import Dict, Tuple
+from smplx import SMPL  # import direct de la classe
 
 class SMPLEngine:
-    """
-    Moteur pour la reconstruction 3D du corps humain avec SMPL.
-    Génère un mesh 3D à partir des keypoints détectés.
-    """
-
     def __init__(self, model_dir: str = './models'):
-        """
-        Initialise le moteur SMPL.
+        torch.manual_seed(0)
+        np.random.seed(0)
+        random.seed(0)
 
-        Args:
-            model_dir: Répertoire contenant les modèles pré-entraînés
-        """
         self.model_dir = Path(model_dir)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Créer le répertoire si nécessaire
         self.model_dir.mkdir(parents=True, exist_ok=True)
-        
         self.smpl_model = None
+        self.current_gender = None
         print(f"SMPLEngine initialisé sur device: {self.device}")
 
-    def load_smpl_model(self, model_type: str = 'smpl') -> bool:
+    def load_smpl_model(self, gender: str = 'neutral') -> bool:
         """
-        Charge le modèle SMPL. 
-        Si les fichiers modèles ne sont pas disponibles, crée un modèle léger.
-
-        Args:
-            model_type: 'smpl', 'smplx', ou 'smplh'
-
-        Returns:
-            True si succès, False sinon
+        Charge le modèle SMPL à partir du fichier correspondant au genre.
+        Les fichiers attendus dans models/smpl/ :
+          - neutral : SMPL_NEUTRAL.npz
+          - female  : SMPL_FEMALE.npz
+          - male    : SMPL_MALE.npz
+          - male    : basicmodel_m_lbs_10_207_0_v1.1.0.pkl
         """
-        try:
-            # Vérifier si les fichiers modèles existent
-            model_path = self.model_dir / f'{model_type.upper()}_NEUTRAL.npz'
-            
-            if not model_path.exists():
-                print(f"⚠️  Fichiers modèles SMPL non trouvés dans {self.model_dir}/")
-                print(f"    Création d'un modèle léger synthétique...")
-                self.smpl_model = self._create_lightweight_smpl()
-                return True
-            
-            # Charger le modèle SMPL
-            self.smpl_model = smplx.create(
-                model_path=str(self.model_dir),
-                model_type=model_type,
-                gender='neutral',
-                batch_size=1,
-                device=self.device,
-                create_transl=True,
-                create_expression=False,
-                ext='npz'
-            )
-            print(f"✓ Modèle {model_type.upper()} chargé avec succès")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Erreur lors du chargement du modèle SMPL: {e}")
-            print(f"\n📥 Pour utiliser le vrai modèle SMPL:")
-            print(f"   1. Exécute: python INSTALL_SMPL_MODELS.py")
-            print(f"   2. Ou télécharge manuellement depuis https://smpl.is.tue.mpg.de/")
-            print(f"   3. Place les fichiers .npz dans {self.model_dir}/")
-            print(f"\n⏱️  En attendant, utilisation d'un modèle léger synthétique\n")
+        # Associer le genre au nom de fichier
+        filenames = {
+            'neutral': 'SMPL_NEUTRAL.npz',
+            'female':  'SMPL_FEMALE.npz',
+            'male':    'SMPL_MALE.npz'
+        }
+        if gender not in filenames:
+            raise ValueError(f"Genre inconnu : {gender}. Choisissez parmi {list(filenames.keys())}")
+
+        model_file = self.model_dir / 'smpl' / filenames[gender]
+        if not model_file.exists():
+            # Essayer aussi l'extension .pkl (ancien format)
+            pkl_file = model_file.with_name(model_file.stem + '.pkl')
+            if pkl_file.exists():
+                model_file = pkl_file
+            else:
+                # Essayer les noms "basicmodel_..."
+                alt_names = {
+                    'neutral': 'basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl',
+                    'female':  'basicmodel_f_lbs_10_207_0_v1.1.0.pkl',
+                    'male':    'basicmodel_m_lbs_10_207_0_v1.1.0.pkl'
+                }
+                legacy_file = self.model_dir / 'smpl' / alt_names.get(gender, '')
+                if legacy_file.exists():
+                    model_file = legacy_file
+
+        if not model_file.exists():
+            print(f"⚠️  Fichier modèle non trouvé : {model_file}")
+            print("   Utilisation du modèle léger synthétique.")
             self.smpl_model = self._create_lightweight_smpl()
+            return False
+
+        try:
+            self.smpl_model = SMPL(
+                model_path=str(model_file),
+                batch_size=1,
+                create_transl=True,
+                device=self.device
+            )
+            print(f"✓ Modèle SMPL ({gender}) chargé avec succès depuis {model_file.name}")
+            self.current_gender = gender
             return True
+        except Exception as e:
+            print(f"❌ Erreur lors du chargement du modèle SMPL : {e}")
+            print("   Utilisation du modèle léger synthétique.")
+            self.smpl_model = self._create_lightweight_smpl()
+            return False
 
     def _create_lightweight_smpl(self):
-        """
-        Crée un modèle SMPL léger synthétique pour développement.
-        Génère des vertices réalistes sans dépendre des fichiers modèles.
-        """
         class LightweightSMPL:
-            """Modèle SMPL léger basé sur des paramètres aléatoires."""
-            
             def __init__(self, device='cpu'):
                 self.device = device
                 self.faces = self._get_smpl_faces()
-                # Shape et pose templates
-                self.mean_shape = torch.zeros(10, device=device)
-                self.mean_pose = torch.zeros(72, device=device)
-                
+                self.fixed_vertices = torch.zeros(6890, 3, device=device)
+
             def _get_smpl_faces(self):
-                """Retourne les faces du SMPL standard (6890 vertices, ~13776 faces)."""
-                # Faces simplifiées pour un cube tesselé -> 6890 vertices
                 faces = []
                 for i in range(0, 6890 - 2, 3):
                     faces.append([i, i + 1, i + 2])
                 return np.array(faces, dtype=np.uint32)
-            
+
             def __call__(self, betas, body_pose, global_orient, transl, return_verts=True):
-                """
-                Génère un mesh SMPL synthétique.
-                
-                Args:
-                    betas: shape parameters (batch_size, 10)
-                    body_pose: body pose parameters (batch_size, 63)
-                    global_orient: global orientation (batch_size, 3)
-                    transl: translation (batch_size, 3)
-                    return_verts: retourner les vertices
-                    
-                Returns:
-                    Object avec attributes .vertices et .faces
-                """
                 batch_size = betas.shape[0]
-                
-                # Générer les vertices de base (6890 points pour SMPL)
-                # Utiliser les paramètres pour moduler la forme
-                shape_effect = betas @ torch.randn(10, 6890, device=self.device) * 0.1
-                
-                # Vertices de base (boîte englobante)
-                vertices = torch.randn(batch_size, 6890, 3, device=self.device) * 0.3
-                
-                # Appliquer la translation
+                vertices = self.fixed_vertices.unsqueeze(0).repeat(batch_size, 1, 1)
                 vertices = vertices + transl.unsqueeze(1)
-                
-                # Créer l'output
                 class Output:
                     pass
-                
                 output = Output()
                 output.vertices = vertices
                 output.faces = self.faces
-                
                 return output
-        
+
         return LightweightSMPL(device=self.device)
 
-
-
     def estimate_smpl_params_from_keypoints(self, keypoints: np.ndarray) -> Dict:
-        """
-        Estime les paramètres SMPL à partir des keypoints MediaPipe.
-        
-        Mappe les 33 keypoints MediaPipe vers les 17 keypoints COCO du SMPL.
-
-        Args:
-            keypoints: Array de keypoints MediaPipe (33, 3)
-
-        Returns:
-            Dict contenant pose, shape, translation
-        """
-        # Mapping simplifié: utiliser les keypoints principaux
-        # MediaPipe -> COCO/SMPL
-        coco_indices = [
-            0,   # nose
-            5, 2, 7, 4, 9, 6, 11, 8, 13, 10, 15, 12, 17, 14, 19, 16
-        ]
-        
         batch_size = 1
-        
-        # Initialiser avec des paramètres par défaut
         betas = torch.zeros(batch_size, 10, device=self.device)
-        body_pose = torch.zeros(batch_size, 63, device=self.device)
+        body_pose = torch.zeros(batch_size, 69, device=self.device)
         global_orient = torch.zeros(batch_size, 3, device=self.device)
         transl = torch.zeros(batch_size, 3, device=self.device)
-        
+
         return {
             'betas': betas.detach().cpu().numpy()[0],
             'body_pose': body_pose.detach().cpu().numpy()[0],
@@ -171,27 +117,16 @@ class SMPLEngine:
         }
 
     def generate_mesh(self, smpl_params: Dict) -> np.ndarray:
-        """
-        Génère le mesh SMPL à partir des paramètres.
-
-        Args:
-            smpl_params: Dict avec 'betas', 'body_pose', 'global_orient', 'translation'
-
-        Returns:
-            Array des vertices du mesh (n_vertices, 3)
-        """
         if self.smpl_model is None:
             if not self.load_smpl_model():
                 return None
 
         try:
-            # Convertir en tensors
             betas = torch.from_numpy(smpl_params['betas']).unsqueeze(0).float().to(self.device)
             body_pose = torch.from_numpy(smpl_params['body_pose']).unsqueeze(0).float().to(self.device)
             global_orient = torch.from_numpy(smpl_params['global_orient']).unsqueeze(0).float().to(self.device)
             transl = torch.from_numpy(smpl_params['translation']).unsqueeze(0).float().to(self.device)
 
-            # Générer le mesh SMPL
             output = self.smpl_model(
                 betas=betas,
                 body_pose=body_pose,
@@ -199,296 +134,233 @@ class SMPLEngine:
                 transl=transl,
                 return_verts=True
             )
-            
             vertices = output.vertices.detach().cpu().numpy()[0]
             print(f"✓ Mesh généré: {len(vertices)} vertices")
             return vertices
-            
         except Exception as e:
             print(f"❌ Erreur lors de la génération du mesh: {e}")
             return None
 
     def get_mesh_faces(self) -> np.ndarray:
-        """Retourne les faces du modèle SMPL."""
         if self.smpl_model is None:
             return None
-        
         try:
-            faces = self.smpl_model.faces
-            return np.array(faces, dtype=np.uint32)
+            return np.array(self.smpl_model.faces, dtype=np.uint32)
         except:
             return None
 
-    def process_image(self, image_array: np.ndarray, keypoints: np.ndarray) -> Dict:
+    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], image_shapes: list[Tuple[int, int]]) -> Dict:
         """
-        Traite une image complète pour générer le mesh 3D.
-
-        Args:
-            image_array: Image numpy
-            keypoints: Keypoints détectés
-
-        Returns:
-            Dict avec vertices, faces, et metadata
+        Ajuste le modèle SMPL à plusieurs vues en optimisant pose et shape partagés.
+        Supposition: Vue 0 = Face, Vue 1 = Profil (approx 90 deg)
         """
-        # Estimer les paramètres SMPL
-        smpl_params = self.estimate_smpl_params_from_keypoints(keypoints)
+        if self.smpl_model is None or not keypoints_list:
+            return None
+            
+        num_views = len(keypoints_list)
+        print(f"🔄 Début fitting Multi-View avec {num_views} vues")
+        
+        # 1. Préparation des données pour chaque vue
+        target_kps_list = []
+        weights_list = []
+        
+        # Indices (identiques pour toutes les vues)
+        mp_indices = [12, 11, 24, 23, 14, 13, 26, 25, 16, 15, 28, 27]
+        smpl_indices = [17, 16, 2, 1, 19, 18, 5, 4, 21, 20, 8, 7]
+        
+        for kps in keypoints_list:
+            # Conversion et Inversion Y (MediaPipe -> SMPL Y-up)
+            t_kps = torch.tensor(kps[:, :2], dtype=torch.float32, device=self.device)
+            t_kps[:, 1] = 1.0 - t_kps[:, 1]
+            target_kps_list.append(t_kps)
+            
+            w = torch.tensor(kps[:, 2], dtype=torch.float32, device=self.device).unsqueeze(1)
+            w = torch.clamp(w, 0.0, 1.0) # Sécurité (MediaPipe peut donner >1 ?)
+            weights_list.append(w)
 
-        # Générer le mesh
+        # 2. Paramètres PARTAGÉS (Le corps est unique)
+        batch_size = 1
+        betas = torch.zeros(batch_size, 10, device=self.device, requires_grad=True)
+        body_pose = torch.zeros(batch_size, 69, device=self.device, requires_grad=True)
+        # Translation globale du corps (racine)
+        transl = torch.zeros(batch_size, 3, device=self.device, requires_grad=True) 
+        
+        # 3. Paramètres PAR VUE (Rotation globale + Caméra)
+        # Chaque vue a sa propre rotation globale du corps (ou position de caméra, c'est équivalent en WeakPersp)
+        # Vue 0 (Face) : Rotation ~0
+        # Vue 1 (Profil): Rotation ~90 deg sur Y (si profil gauche) ou -90 (profil droit). 
+        # On initialise Vue 1 à 90 deg (1.57 rad) sur Y par défaut pour aider la convergence.
+        
+        global_orients = []
+        cam_scales = []
+        cam_transs = []
+        
+        for i in range(num_views):
+            # Rotation
+            orient = torch.zeros(batch_size, 3, device=self.device, requires_grad=True)
+            if i == 1:
+                # Initialisation Profil (90 deg autour de Y)
+                # Axis-angle: [0, 1.57, 0]
+                with torch.no_grad():
+                    orient[0, 1] = 1.57
+            global_orients.append(orient)
+            
+            # Caméra (Scale, Trans)
+            # Init: Scale 0.6, Centré (0.5, 0.5)
+            scale = torch.tensor([0.6], device=self.device, requires_grad=True)
+            trans = torch.tensor([[0.5, 0.5]], device=self.device, requires_grad=True)
+            cam_scales.append(scale)
+            cam_transs.append(trans)
+            
+        # Optimiseur : Tous les paramètres
+        params = [betas, body_pose, transl] + global_orients + cam_scales + cam_transs
+        optimizer = torch.optim.Adam(params, lr=0.02)
+        
+        # Boucle d'optimisation
+        for i in range(150): # Un peu plus d'itérations pour le multi-view
+            optimizer.zero_grad()
+            total_loss = 0.0
+            
+            # Pour chaque vue
+            for v_idx in range(num_views):
+                # Forward SMPL avec l'orientation de CETTE vue
+                # Note: betas/body_pose/transl sont partagés. Seul global_orient change (simule la caméra qui tourne)
+                output = self.smpl_model(
+                    betas=betas,
+                    body_pose=body_pose,
+                    global_orient=global_orients[v_idx],
+                    transl=transl,
+                    return_verts=False
+                )
+                joints_3d = output.joints
+                
+                # Projection Caméra de CETTE vue
+                joints_to_fit = joints_3d[:, smpl_indices, :]
+                joints_2d_proj = joints_to_fit[:, :, :2]
+                
+                # Appliquer params caméra de CETTE vue
+                s = torch.abs(cam_scales[v_idx])
+                t = cam_transs[v_idx]
+                joints_2d_proj = joints_2d_proj * s + t.unsqueeze(1)
+                
+                # Loss Reprojection pour CETTE vue
+                targets = target_kps_list[v_idx][mp_indices]
+                w = weights_list[v_idx][mp_indices]
+                
+                loss_view = torch.mean(w * (joints_2d_proj - targets)**2)
+                total_loss += loss_view * 100.0 # Poids reprojection
+            
+            # Priors (Régularisation sur les paramètres partagés)
+            loss_beta = torch.mean(betas**2) * 0.1
+            loss_pose = torch.mean(body_pose**2) * 0.1
+            
+            loss = total_loss + loss_beta + loss_pose
+            
+            loss.backward()
+            optimizer.step()
+            
+            # Clamping Shape
+            with torch.no_grad():
+                betas.clamp_(-3.0, 3.0)
+                
+            if i % 50 == 0:
+                print(f"Iter {i}: Loss={loss.item():.4f} (Reproj={total_loss.item():.4f}, Beta={loss_beta.item():.4f}, Pose={loss_pose.item():.4f})")
+        
+        final_loss = loss.item()
+        print(f"✅ Fitting terminé. Loss finale: {final_loss:.4f}")
+
+        # Retourner les paramètres optimisés + LOSS pour validation
+        return {
+            'betas': betas.detach().cpu().numpy()[0],
+            'body_pose': body_pose.detach().cpu().numpy()[0],
+            'global_orient': global_orients[0].detach().cpu().numpy()[0], # Vue Face
+            'translation': transl.detach().cpu().numpy()[0],
+            'loss': final_loss
+        }
+
+    def normalize_mesh_height(self, vertices: np.ndarray, target_height: float) -> np.ndarray:
+        """
+        Redimensionne le mesh pour qu'il ait une hauteur cible exacte.
+        """
+        if vertices is None or len(vertices) == 0:
+            return vertices
+            
+        # 1. Calculer la hauteur actuelle (Y-axis)
+        y_min = np.min(vertices[:, 1])
+        y_max = np.max(vertices[:, 1])
+        current_height = y_max - y_min
+        
+        if current_height <= 0:
+            return vertices
+            
+        # 2. Facteur d'échelle
+        scale_factor = target_height / current_height
+        print(f"📏 Redimensionnement mesh: {current_height:.2f}m -> {target_height:.2f}m (Facteur: {scale_factor:.2f})")
+        
+        # 3. Appliquer l'échelle (centré sur le bassin ou le sol ? SMPL est centré bassin généralement, mais ici on scale tout simplement)
+        # On scale autour de (0,0,0) pour simplifier
+        vertices = vertices * scale_factor
+        
+        return vertices
+        
+    def process_image(self, image_data_list: list[dict], gender: str = 'neutral', height: float = None) -> Dict:
+        """
+        Traite une ou plusieurs images (Multi-View).
+        image_data_list: Liste de dicts {'image': np.array, 'keypoints': np.array}
+        """
+        # Changer de modèle si nécessaire
+        if self.current_gender != gender:
+            print(f"Changement de modèle vers : {gender}")
+            if not self.load_smpl_model(gender):
+                return None
+        
+        # Préparer les listes pour le fitting multi-view
+        keypoints_list = [d['keypoints'] for d in image_data_list]
+        shapes_list = [d['image'].shape[:2] for d in image_data_list]
+        
+        try:
+            # Appel au nouveau moteur Multi-View
+            smpl_params = self.fit_model_to_multiple_views(keypoints_list, shapes_list)
+            
+            if smpl_params is None: # Fallback
+                 print("⚠️ Echec fitting Multi-View, utilisation paramètres par défaut (basé sur vue 1)")
+                 # Fallback: On utilise juste les keypoints de la première vue pour une estimation basique
+                 smpl_params = self.estimate_smpl_params_from_keypoints(keypoints_list[0])
+                 
+        except Exception as e:
+            print(f"❌ Erreur Fitting Multi-View: {e}")
+            smpl_params = self.estimate_smpl_params_from_keypoints(keypoints_list[0])
+
         vertices = self.generate_mesh(smpl_params)
+        
+        # ⚡ CALIBRATION DE LA TAILLE
+        # Si une taille cible est fournie (ou une taille par défaut), on redimensionne le mesh.
+        # Par défaut : Homme 1.75m, Femme 1.65m
+        if height is None or height <= 0:
+            height = 1.75 if gender == 'male' else 1.65
+            print(f"ℹ️ Pas de taille fournie. Utilisation standard pour {gender} : {height}m")
+            
+        if vertices is not None:
+             vertices = self.normalize_mesh_height(vertices, height)
 
         if vertices is None:
             return None
-
+            
         return {
             'vertices': vertices,
             'faces': self.get_mesh_faces(),
             'smpl_params': smpl_params,
-            'n_vertices': len(vertices)
+            'n_vertices': len(vertices),
+            'loss': smpl_params.get('loss', 0.0)
         }
 
     def cleanup(self):
-        """Libère les ressources."""
         if self.smpl_model is not None:
             del self.smpl_model
         torch.cuda.empty_cache()
 
 
 def create_smpl_engine(model_dir: str = './models') -> SMPLEngine:
-    """Factory function pour créer un moteur SMPL."""
     engine = SMPLEngine(model_dir)
-    engine.load_smpl_model('smpl')
-    return engine
-
-    """
-    Moteur pour la reconstruction 3D du corps humain avec SMPL + HMR/SPIN.
-    Génère un mesh 3D à partir des keypoints détectés.
-    """
-
-    def __init__(self, model_dir: str = './models'):
-        """
-        Initialise le moteur SMPL.
-
-        Args:
-            model_dir: Répertoire contenant les modèles pré-entraînés
-        """
-        self.model_dir = Path(model_dir)
-        if torch is not None:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        else:
-            self.device = 'cpu'
-        self.smpl_model = None
-        self.regressor = None
-
-        print(f"SMPLEngine initialisé sur device: {self.device}")
-
-    def load_smpl_model(self, model_path: Optional[str] = None) -> bool:
-        """
-        Charge le modèle SMPL.
-
-        Args:
-            model_path: Chemin du fichier de modèle SMPL
-
-        Returns:
-            True si succès, False sinon
-        """
-        try:
-            # Import conditionnel pour éviter les dépendances manquantes
-            try:
-                from smplx import SMPL
-            except ImportError:
-                print("Attention: smplx non installé. Utilisant un modèle simulé.")
-                self.smpl_model = self._create_dummy_smpl()
-                return True
-
-            if model_path is None:
-                model_path = self.model_dir / 'SMPL_NEUTRAL.pkl'
-
-            if not os.path.exists(model_path):
-                print(f"Modèle non trouvé: {model_path}")
-                self.smpl_model = self._create_dummy_smpl()
-                return False
-
-            self.smpl_model = SMPL(
-                model_path=str(model_path),
-                batch_size=1,
-                create_transl=False
-            ).to(self.device)
-
-            return True
-        except Exception as e:
-            print(f"Erreur lors du chargement du modèle SMPL: {e}")
-            self.smpl_model = self._create_dummy_smpl()
-            return False
-
-    def load_hmr_regressor(self, model_path: Optional[str] = None) -> bool:
-        """
-        Charge le modèle HMR/SPIN pour la régression des paramètres SMPL.
-
-        Args:
-            model_path: Chemin du fichier du modèle
-
-        Returns:
-            True si succès, False sinon
-        """
-        try:
-            # Simuler un regressor si le modèle n'existe pas
-            self.regressor = self._create_dummy_regressor()
-            return True
-        except Exception as e:
-            print(f"Erreur lors du chargement du regressor HMR: {e}")
-            self.regressor = self._create_dummy_regressor()
-            return False
-
-    def estimate_smpl_params(self, keypoints: np.ndarray) -> Dict:
-        """
-        Estime les paramètres SMPL à partir des keypoints.
-
-        Args:
-            keypoints: Array de keypoints (n_keypoints, 3)
-
-        Returns:
-            Dict contenant pose, shape, et translation
-        """
-        batch_size = 1
-
-        # Obtenir les paramètres SMPL
-        pose_params = self.regressor['pose'](
-            torch.randn(batch_size, 23 * 3).to(self.device)
-        )
-        shape_params = self.regressor['shape'](
-            torch.randn(batch_size, 10).to(self.device)
-        )
-        trans_params = torch.zeros(batch_size, 3).to(self.device)
-
-        return {
-            'pose': pose_params.detach().cpu().numpy()[0],
-            'shape': shape_params.detach().cpu().numpy()[0],
-            'translation': trans_params.detach().cpu().numpy()[0]
-        }
-
-    def generate_mesh(self, smpl_params: Dict) -> np.ndarray:
-        """
-        Génère le mesh SMPL à partir des paramètres.
-
-        Args:
-            smpl_params: Dict avec 'pose', 'shape', 'translation'
-
-        Returns:
-            Array des vertices du mesh (n_vertices, 3)
-        """
-        if self.smpl_model is None:
-            self.load_smpl_model()
-
-        batch_size = 1
-
-        # Convertir en tensors
-        pose = torch.from_numpy(smpl_params['pose']).unsqueeze(0).float().to(self.device)
-        shape = torch.from_numpy(smpl_params['shape']).unsqueeze(0).float().to(self.device)
-        trans = torch.from_numpy(smpl_params['translation']).unsqueeze(0).float().to(self.device)
-
-        # Générer le mesh SMPL
-        try:
-            output = self.smpl_model(
-                betas=shape,
-                body_pose=pose[:, 3:],
-                global_orient=pose[:, :3],
-                transl=trans
-            )
-            vertices = output.vertices.detach().cpu().numpy()[0]
-        except Exception as e:
-            print(f"Erreur lors de la génération du mesh: {e}")
-            vertices = self._create_dummy_mesh()
-
-        return vertices
-
-    def process_image(self, image_array: np.ndarray, keypoints: np.ndarray) -> Dict:
-        """
-        Traite une image complète pour générer le mesh 3D.
-
-        Args:
-            image_array: Image numpy
-            keypoints: Keypoints détectés
-
-        Returns:
-            Dict avec vertices, faces, et metadata
-        """
-        # Estimer les paramètres SMPL
-        smpl_params = self.estimate_smpl_params(keypoints)
-
-        # Générer le mesh
-        vertices = self.generate_mesh(smpl_params)
-
-        return {
-            'vertices': vertices,
-            'faces': self._get_smpl_faces(),
-            'smpl_params': smpl_params,
-            'n_vertices': len(vertices)
-        }
-
-    def _create_dummy_smpl(self):
-        """Crée un modèle SMPL fictif pour les tests."""
-        class DummySMPL:
-            def __call__(self, betas, body_pose, global_orient, transl):
-                batch_size = betas.shape[0]
-                # Retourner des vertices fictifs
-                vertices = torch.randn(batch_size, 6890, 3)
-                return type('Output', (), {'vertices': vertices})()
-
-            def to(self, device):
-                return self
-
-        return DummySMPL()
-
-    def _create_dummy_regressor(self) -> Dict:
-        """Crée un regressor fictif pour les tests."""
-        if torch is None:
-            # Sans torch, retourner des fonctions lambda
-            return {
-                'pose': lambda x: np.random.randn(1, 69),
-                'shape': lambda x: np.random.randn(1, 10)
-            }
-        
-        class DummyRegressor(torch.nn.Module):
-            def __init__(self, output_size):
-                super().__init__()
-                self.fc = torch.nn.Linear(256, output_size)
-
-            def forward(self, x):
-                return self.fc(torch.randn(x.shape[0], 256))
-
-        return {
-            'pose': DummyRegressor(69),
-            'shape': DummyRegressor(10)
-        }
-
-    def _create_dummy_mesh(self) -> np.ndarray:
-        """Crée un mesh fictif pour les tests."""
-        # Créer un mesh simple (cube)
-        return np.array([
-            [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-            [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
-        ] * 860, dtype=np.float32)
-
-    def _get_smpl_faces(self) -> np.ndarray:
-        """Retourne les faces du modèle SMPL."""
-        # Les faces du SMPL (13776 faces)
-        # Pour la démo, retourner un ensemble minimal de faces
-        faces = []
-        n_verts = 6890
-        for i in range(0, n_verts - 2, 3):
-            faces.append([i, i + 1, i + 2])
-        return np.array(faces, dtype=np.uint32)
-
-    def cleanup(self):
-        """Libère les ressources."""
-        if self.smpl_model is not None:
-            del self.smpl_model
-        if self.regressor is not None:
-            del self.regressor
-
-
-def create_smpl_engine(model_dir: str = './models') -> SMPLEngine:
-    """Factory function pour créer un moteur SMPL."""
-    engine = SMPLEngine(model_dir)
-    engine.load_smpl_model('smpl')
+    engine.load_smpl_model('neutral')  # Charge le modèle neutre par défaut
     return engine

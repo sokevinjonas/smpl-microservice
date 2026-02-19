@@ -27,9 +27,13 @@ def setup_smpl_models():
     
     # Vérifier si les fichiers existent
     model_path = models_dir / 'SMPL_NEUTRAL.npz'
+    legacy_model_path = models_dir / 'smpl' / 'basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl'
     
     if model_path.exists():
         print(f"✓ Modèle SMPL trouvé: {model_path}")
+        return True
+    elif legacy_model_path.exists():
+        print(f"✓ Modèle SMPL (legacy) trouvé: {legacy_model_path}")
         return True
     else:
         print(f"\n⚠️  Fichiers modèles SMPL non trouvés")
