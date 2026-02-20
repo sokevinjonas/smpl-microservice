@@ -3,6 +3,7 @@ from typing import Dict
 from pathlib import Path
 import torch
 import random
+from typing import Dict, Tuple
 from smplx import SMPL  # import direct de la classe
 
 class SMPLEngine:

@@ -3,3 +3,7 @@ pour voir les logs en continu : sudo docker logs -f smpl-microservice
 Redémarrer le conteneur pour appliquer mon correctif (le fichier est monté, donc pas besoin de tout reconstruire, juste redémarrer) : docker-compose restart smpl-microservice
 
 Cela va recréer l'image:  docker-compose up --build
+
+Cette commande prend le contenu du script 
+
+evaluate_model.py qui est sur votre bureau) et l'envoie directement à Python à l'intérieur du conteneur Docker.: 
