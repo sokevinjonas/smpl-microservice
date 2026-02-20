@@ -30,9 +30,6 @@ UPLOAD_FOLDER = '/tmp/uploads'
 OUTPUT_FOLDER = os.path.join(os.getcwd(), 'output')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-from pathlib import Path
-import logging
-
 from utils.pose_estimation import PoseEstimator, load_image, download_image, validate_image
 from utils.mesh_utils import MeshMeasurements, validate_measurements, create_measurement_report, export_mesh_to_obj
 from utils.fallback_service import FallbackMeasurementService
@@ -44,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Initialisation Flask
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB max limit to prevent DoS
 CORS(app)
 
 # Initialisation des moteurs
@@ -181,7 +179,6 @@ def estimate_measurements():
             mt_raw = form_data.get('measures_table')
             try:
                 if mt_raw:
-                    import json
                     measures_table = json.loads(mt_raw)
                 else:
                     measures_table = []

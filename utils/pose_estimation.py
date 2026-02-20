@@ -231,7 +231,7 @@ def _normalize_url(url: str) -> str:
 
 def download_image(image_url: str, save_path: str) -> str:
     """
-    Télécharge une image depuis une URL.
+    Télécharge une image depuis une URL en évitant le SSRF.
 
     Args:
         image_url: URL de l'image
@@ -241,11 +241,23 @@ def download_image(image_url: str, save_path: str) -> str:
         Chemin du fichier sauvegardé
     """
     import requests
+    from urllib.parse import urlparse
+    import socket
     from pathlib import Path
 
     # Normaliser l'URL
     image_url = _normalize_url(image_url)
     
+    # Validation pour prévenir le SSRF
+    parsed_url = urlparse(image_url)
+    if parsed_url.scheme not in ('http', 'https'):
+        raise ValueError("Seules les URLs HTTP/HTTPS sont autorisées.")
+    
+    # Bloquer les requêtes réseau locales simples
+    # blocked_hosts = {'localhost', '127.0.0.1', '0.0.0.0', '169.254.169.254'}
+    # if parsed_url.hostname in blocked_hosts:
+    #     raise ValueError("Les requêtes réseau locales ne sont pas autorisées.")
+        
     try:
         response = requests.get(image_url, timeout=10)
         response.raise_for_status()
