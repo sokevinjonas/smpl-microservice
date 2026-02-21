@@ -41,88 +41,88 @@ def run_evaluation():
                 try: return float(v) * 10.0 # cm to mm
                 except: return None
             
-        true_measures = {
-            'tour_poitrine': clean_val(row['chest_circumference_cm']),
-            'taille': clean_val(row['waist_circumference_cm']),
-            'hanche': clean_val(row['hips_circumference_cm']),
-            'cuisse': clean_val(row['thigh_circumference_cm']),
-            'bras': clean_val(row['arm_circumference_cm'])
-        }
-        
-        # Filtrer ce qui n'est pas None
-        true_measures = {k: v for k, v in true_measures.items() if v is not None}
-        
-        # Localiser les photos
-        person_dir = os.path.join(DATASET_DIR, person_id)
-        if not os.path.exists(person_dir):
-            print(f"  ⚠️ Photos introuvables pour ID {person_id}. Ignoré.")
-            continue
+            true_measures = {
+                'tour_poitrine': clean_val(row['chest_circumference_cm']),
+                'taille': clean_val(row['waist_circumference_cm']),
+                'hanche': clean_val(row['hips_circumference_cm']),
+                'cuisse': clean_val(row['thigh_circumference_cm']),
+                'bras': clean_val(row['arm_circumference_cm'])
+            }
             
-        # Chercher les images de face et profil
-        images = os.listdir(person_dir)
-        front_img = None
-        side_img = None
-        
-        for img in images:
-            if 'front' in img.lower():
-                front_img = os.path.join(person_dir, img)
-            elif 'side' in img.lower():
-                side_img = os.path.join(person_dir, img)
+            # Filtrer ce qui n'est pas None
+            true_measures = {k: v for k, v in true_measures.items() if v is not None}
+            
+            # Localiser les photos
+            person_dir = os.path.join(DATASET_DIR, person_id)
+            if not os.path.exists(person_dir):
+                print(f"  ⚠️ Photos introuvables pour ID {person_id}. Ignoré.")
+                continue
                 
-        if not front_img:
-            # S'il n'y en a qu'une ou deux avec des noms différents, on prend la 1ère
-            if len(images) > 0: front_img = os.path.join(person_dir, images[0])
-        if not side_img:
-            # On prend la 2ème si elle existe
-            if len(images) > 1: side_img = os.path.join(person_dir, images[1])
+            # Chercher les images de face et profil
+            images = os.listdir(person_dir)
+            front_img = None
+            side_img = None
             
-        if not front_img:
-             print(f"  ⚠️ Aucune image pour ID {person_id}. Ignoré.")
-             continue
-             
-        photos_to_send = [front_img]
-        if side_img: photos_to_send.append(side_img)
-        
-        print(f"\nTraitement ID {person_id} ({gender}, {height_m}m)...")
-        
-        # Préparer la requête multi-part
-        files = [('photos', (os.path.basename(p), open(p, 'rb'), 'image/jpeg')) for p in photos_to_send]
-        data = {
-            'measures_table': json.dumps(list(true_measures.keys())),
-            'gender': gender,
-            'height': str(height_m) if height_m else ''
-        }
-        
-        # Appel API
-        try:
-            response = requests.post(API_URL, files=files, data=data)
-            response.raise_for_status()
-            res_json = response.json()
-            
-            pred_measures = res_json.get('measurements', {})
-            
-            person_result = {'id': person_id, 'errors': {}}
-            
-            print("  Comparaison (Vrai vs Prédit) :")
-            for measure_name, true_val in true_measures.items():
-                pred_val = pred_measures.get(measure_name)
-                if pred_val is not None:
-                    error = abs(true_val - pred_val)
-                    person_result['errors'][measure_name] = error
-                    print(f"    - {measure_name}: {true_val/10:.1f}cm vs {pred_val/10:.1f}cm (Diff: {error/10:.1f}cm)")
-                else:
-                    print(f"    - {measure_name}: {true_val/10:.1f}cm vs NON PREDIT")
+            for img in images:
+                if 'front' in img.lower():
+                    front_img = os.path.join(person_dir, img)
+                elif 'side' in img.lower():
+                    side_img = os.path.join(person_dir, img)
                     
-            results.append(person_result)
-            
-        except Exception as e:
-            print(f"  ❌ Erreur API : {e}")
-            if 'response' in locals() and hasattr(response, 'text'):
-                print(f"  Détails : {response.text}")
+            if not front_img:
+                # S'il n'y en a qu'une ou deux avec des noms différents, on prend la 1ère
+                if len(images) > 0: front_img = os.path.join(person_dir, images[0])
+            if not side_img:
+                # On prend la 2ème si elle existe
+                if len(images) > 1: side_img = os.path.join(person_dir, images[1])
                 
-        # Fermer les fichiers
-        for _, f_tuple in files:
-            f_tuple[1].close()
+            if not front_img:
+                 print(f"  ⚠️ Aucune image pour ID {person_id}. Ignoré.")
+                 continue
+                 
+            photos_to_send = [front_img]
+            if side_img: photos_to_send.append(side_img)
+            
+            print(f"\nTraitement ID {person_id} ({gender}, {height_m}m)...")
+            
+            # Préparer la requête multi-part
+            files = [('photos', (os.path.basename(p), open(p, 'rb'), 'image/jpeg')) for p in photos_to_send]
+            data = {
+                'measures_table': json.dumps(list(true_measures.keys())),
+                'gender': gender,
+                'height': str(height_m) if height_m else ''
+            }
+            
+            # Appel API
+            try:
+                response = requests.post(API_URL, files=files, data=data)
+                response.raise_for_status()
+                res_json = response.json()
+                
+                pred_measures = res_json.get('measurements', {})
+                
+                person_result = {'id': person_id, 'errors': {}}
+                
+                print("  Comparaison (Vrai vs Prédit) :")
+                for measure_name, true_val in true_measures.items():
+                    pred_val = pred_measures.get(measure_name)
+                    if pred_val is not None:
+                        error = abs(true_val - pred_val)
+                        person_result['errors'][measure_name] = error
+                        print(f"    - {measure_name}: {true_val/10:.1f}cm vs {pred_val/10:.1f}cm (Diff: {error/10:.1f}cm)")
+                    else:
+                        print(f"    - {measure_name}: {true_val/10:.1f}cm vs NON PREDIT")
+                        
+                results.append(person_result)
+                
+            except Exception as e:
+                print(f"  ❌ Erreur API : {e}")
+                if 'response' in locals() and hasattr(response, 'text'):
+                    print(f"  Détails : {response.text}")
+                    
+            # Fermer les fichiers
+            for _, f_tuple in files:
+                f_tuple[1].close()
 
     # Synthèse Finale
     print("\n\n" + "="*40)

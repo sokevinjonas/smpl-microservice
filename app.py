@@ -53,59 +53,62 @@ use_fallback = False
 def sanitize_measurements(measurements, gender='male', height=1.75):
     """
     Corrige les valeurs physiquement impossibles (ex: Poignet=1.89m) par des heuristiques ou moyennes.
+    Toutes les valeurs sont considérées en millimètres (mm).
     """
-    # Moyennes anthropométriques (approx)
+    # Moyennes anthropométriques en mm (approx pour 1.75m male / 1.65m female)
     averages = {
         'male': {
-            'Poignet': 0.175, 'Tour de Manche': 0.35, 'Epaule': 0.15,
-            'Bas': 0.24, 'Genou': 0.38, 'Cuisse': 0.58,
-            'Tour Emanchure': 0.44
+            'height': 1.75,
+            'poignet': 175, 'bras': 350, 'epaule': 150,
+            'bas': 240, 'genou': 380, 'cuisse': 580,
+            'poitrine': 1000, 'taille': 850, 'hanche': 950
         },
         'female': {
-            'Poignet': 0.16, 'Tour de Manche': 0.29, 'Epaule': 0.13,
-            'Bas': 0.22, 'Genou': 0.35, 'Cuisse': 0.55,
-            'Tour Emanchure': 0.40
+            'height': 1.65,
+            'poignet': 160, 'bras': 290, 'epaule': 130,
+            'bas': 220, 'genou': 350, 'cuisse': 550,
+            'poitrine': 900, 'taille': 700, 'hanche': 950
         }
     }
     # Safety: ensure gender is valid
     if gender not in averages: gender = 'male'
-    avg = averages[gender]
+    ref = averages[gender]
+    
+    # Adapter les moyennes par rapport à la taille (Proportionnel)
+    h_target = height or ref['height']
+    scale = h_target / ref['height']
+    avg = {k: v * scale for k, v in ref.items() if k != 'height'}
+    
+    # Normaliser keys en minuscules pour la sanitization logic interne
+    m = {k.lower(): v for k, v in measurements.items()}
     
     # 1. Poignet
-    if measurements.get('Poignet', 0) > 0.30: # 30cm max
-        logger.warning(f"Sanitizing Poignet: {measurements['Poignet']} -> {avg['Poignet']}")
-        measurements['Poignet'] = avg['Poignet']
+    if m.get('poignet', 0) > 300 or m.get('poignet', 0) < 100: 
+        m['poignet'] = avg['poignet']
 
-    # 2. Tour de Manche (Biceps) - 60cm max (Arnold)
-    if measurements.get('Tour de Manche', 0) > 0.60: 
-        logger.warning(f"Sanitizing Tour de Manche: {measurements['Tour de Manche']} -> {avg['Tour de Manche']}")
-        measurements['Tour de Manche'] = avg['Tour de Manche']
+    # 2. Bras (Biceps)
+    if m.get('bras', 0) > 600 or m.get('bras', 0) < 150: 
+        m['bras'] = avg['bras']
+    if m.get('tour_manche', 0) > 600: m['tour_manche'] = avg['bras']
 
-    # 3. Bas (Cheville) - 40cm max
-    if measurements.get('Bas', 0) > 0.40: 
-         logger.warning(f"Sanitizing Bas: {measurements['Bas']} -> {avg['Bas']}")
-         measurements['Bas'] = avg['Bas']
-
-    # 4. Epaule (Longueur) - Check cohérence avec Dos
-    dos = measurements.get('Dos', 0)
-    # Si Dos > 0, on peut estimer Epaule ~ (Dos - 0.14)/2
-    if measurements.get('Epaule', 0) > 0.30: # 30cm d'épaule c'est énorme
-        if dos > 0.30 and dos < 0.60:
-             est_epaule = round((dos - 0.14) / 2, 2)
-             measurements['Epaule'] = max(0.12, est_epaule)
-             logger.warning(f"Sanitizing Epaule (Calculé depuis Dos): -> {measurements['Epaule']}")
-        else:
-             measurements['Epaule'] = avg['Epaule']
-             logger.warning(f"Sanitizing Epaule (Moyenne): -> {avg['Epaule']}")
-
-    # 5. Tour Emanchure
-    if measurements.get('Tour Emanchure', 0) > 0.80:
-         measurements['Tour Emanchure'] = avg['Tour Emanchure']
+    # 3. Torse (Check limits approx)
+    if m.get('poitrine', 0) > 1400 or m.get('poitrine', 0) < 600: m['poitrine'] = avg['poitrine']
+    if m.get('tour_poitrine', 0) > 1400: m['tour_poitrine'] = avg['poitrine']
     
-    # 6. Genou / Cuisse
-    if measurements.get('Genou', 0) > 0.60: measurements['Genou'] = avg['Genou']
-    if measurements.get('Cuisse', 0) > 0.90: measurements['Cuisse'] = avg['Cuisse']
+    if m.get('taille', 0) > 1400 or m.get('taille', 0) < 500: m['taille'] = avg['taille']
+    if m.get('tour_taille', 0) > 1400: m['tour_taille'] = avg['taille']
     
+    if m.get('hanche', 0) > 1600 or m.get('hanche', 0) < 600: m['hanche'] = avg['hanche']
+    
+    # 4. Cuisse
+    if m.get('cuisse', 0) > 1000 or m.get('cuisse', 0) < 300: m['cuisse'] = avg['cuisse']
+
+    # Réinjecter dans le dictionnaire d'origine en respectant les clés d'entrée
+    for k in measurements.keys():
+        kl = k.lower()
+        if kl in m:
+            measurements[k] = m[kl]
+            
     return measurements
 
 
@@ -409,11 +412,11 @@ def estimate_measurements():
              logger.error("Erreur critique: Aucun mesh généré")
              return jsonify({'error': 'Echec de génération du modèle 3D'}), 500
 
-        # Output formatting & Sanitization
-        measurements_clean = {k.strip(' "[]\''): v for k, v in measurements.items()}
+        # Output formatting & Sanitization (Convert from meters to millimeters)
+        measurements_clean = {k.strip(' "[]\''): round(v * 1000.0, 1) for k, v in measurements.items()}
         
-        # Appliquer la correction des valeurs impossibles
-        measurements_clean = sanitize_measurements(measurements_clean, gender, height=1.75) # height hardcodé ou récupéré
+        # Appliquer la correction des valeurs impossibles (sanitize_measurements attend des mm)
+        measurements_clean = sanitize_measurements(measurements_clean, gender, height=height)
 
         # Générer un ID unique pour cette prédiction (pour le feedback)
         prediction_id = str(uuid.uuid4())

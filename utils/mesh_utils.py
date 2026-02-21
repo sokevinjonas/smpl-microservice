@@ -12,125 +12,48 @@ class MeshMeasurements:
     # Correspondance des keypoints SMPL avec les mesures corporelles (Tailoring)
     # Indices approximatifs basés sur la topologie SMPL
     BODY_PART_VERTICES = {
-        'dos': { # Largeur carrure dos
-            'left': 2865, 'right': 6263,
-            'description': 'Largeur carrure dos (acromion à acromion arrière)'
-        },
-        'epaule': { # Longueur épaule
-            'start': 5588, 'end': 4847, # Cou -> Acromion
-            'description': 'Longueur épaule (cou à acromion)'
-        },
         'poitrine': { # Tour de poitrine
-            'indices': list(range(3000, 3020)) + list(range(6500, 6520)), # TODO: Indices précis à valider
-            'description': 'Tour de poitrine (niveau mamelons)'
+            'indices': [3015], # Verified Chest Level
+            'description': 'Tour de poitrine'
         },
-        'long_manche': { # Longueur manche
-            'start': 4847, 'end': 5361, # Acromion -> Poignet
-            'description': 'Longueur manche (acromion au poignet)'
-        },
-        'tour_manche': { # Tour de bras (biceps)
-            'indices': [4964, 4965, 4966, 4967], # Ring approximatif biceps
-            'axis_indices': [4847, 5035], # Acromion -> Coude (pour l'orientation de la coupe)
-            'description': 'Tour de manche (biceps)'
-        },
-        'long_taille': { # Hauteur taille devant (épaule -> taille)
-            'start': 5588, 'end': 3500, # Cou -> Nombril/Taille
-            'description': 'Longueur taille devant'
-        },
-        'tour_taille': { # Tour de taille (plus fin)
-            'indices': list(range(3500, 3510)) + list(range(6800, 6810)),
+        'taille': { # Tour de taille
+            'indices': [3502], # Verified Waist Level
             'description': 'Tour de taille'
         },
-        'pinces': { # Ecart poitrine
-            'left': 3005, 'right': 6505, # Mamelons approx
-            'description': 'Ecart poitrine (mamelon à mamelon)'
-        },
-        'long_camisole': { # Longueur haut (chafop?)
-            'start': 5588, 'end': 660, # Cou -> Bassin
-            'description': 'Longueur camisole (cou au bassin)'
-        },
-        'long_robe': { # Longueur totale
-            'start': 5588, 'end': 6775, # Cou -> Cheville/Sol
-            'description': 'Longueur robe (cou au bas)'
-        },
-        'long_chemise': { # Longueur chemise
-            'start': 5588, 'end': 660, # Cou -> Mi-fesses (similaire camisole pour l'instant)
-            'description': 'Longueur chemise'
-        },
-        'ceinture': { # Tour de ceinture (petites hanches)
-            'indices': [3500], # Placeholder ring
-            'description': 'Tour de ceinture'
-        },
         'bassin': { # Tour de bassin/hanches
-            'indices': list(range(600, 620)) + list(range(3600, 3620)),
+            'indices': [3170], # Verified Hips Level
             'description': 'Tour de bassin'
         },
-        'cuisse': { # Tour de cuisse
-            'indices': [1000, 1001, 1002, 1003], # Ring cuisse
-            'axis_indices': [620, 1100], # Hanche -> Genou (approx)
+        'cuisse': { # Tour de cuisse (Cuisse Gauche)
+            'indices': [1010], 
+            'axis_indices': [3170, 1010], # Hips -> Knee
             'description': 'Tour de cuisse'
         },
-        'genou': { # Tour de genou
-            'indices': [2000, 2001, 2002, 2003], # Ring genou
-            'axis_indices': [1100, 2100], # Haut genou -> Bas genou
-            'description': 'Tour de genou'
+        'bras': { # Tour de bras (Bicep Gauche)
+            'indices': [1723], 
+            'axis_indices': [636, 1723], # Shoulder -> Elbow
+            'description': 'Tour de bras (biceps)'
         },
-        'long_jupe': { # Taille -> Genou/Bas
-            'start': 3500, 'end': 2000, # Taille -> Genou (pour minijupe? ou sol?)
-            'description': 'Longueur jupe (taille au bas)'
-        },
-        'long_pantalon': { # Taille -> Cheville ext
-            'start': 3500, 'end': 6775,
-            'description': 'Longueur pantalon (taille à cheville)'
-        },
-        'bas': { # Tour de cheville
-            'indices': [6775, 6776, 6777],
-            'axis_indices': [2100, 6700], # Genou -> Cheville (approx) pour orientation
-            'description': 'Tour de cheville (bas)'
-        },
-        'poignet': { # Tour de poignet
-            'indices': [5361, 5362, 5363],
-            'axis_indices': [5035, 5361], # Coude -> Poignet (pour orientation)
+        'poignet': { # Tour de poignet (Gauche)
+            'indices': [2096],
+            'axis_indices': [1723, 2096], # Elbow -> Wrist
             'description': 'Tour de poignet'
-        },
-        'tour_emanchure': { # Tour d'emmanchure
-            'indices': [4847, 4848, 4849], # Ring épaule
-            'description': 'Tour d\'emmanchure'
         }
     }
 
     # Correspondance des noms de mesures demandées (Exact user strings normalized)
     MEASUREMENT_MAPPING = {
-        'dos': 'dos',
-        'epaule': 'epaule',
         'poitrine': 'poitrine',
-        'long manche': 'long_manche',
-        'tour de manche': 'tour_manche',
-        'long taille': 'long_taille',
-        'tour taille': 'tour_taille',
-        'pinces': 'pinces',
-        'long camisole': 'long_camisole',
-        'long robe': 'long_robe',
-        'long chemise': 'long_chemise',
-        'ceinture': 'ceinture',
-        'bassin': 'bassin',
-        'cuisse': 'cuisse',
-        'genou': 'genou',
-        'long jupe': 'long_jupe',
-        'long pantalon': 'long_pantalon',
-        'bas': 'bas',
-        'poignet': 'poignet',
-        'tour emanchure': 'tour_emanchure',
-        
-        # Legacy/Fallback mapping
         'tour_poitrine': 'poitrine',
-        'chest_circumference': 'chest', # Keep legacy just in case
-        'taille': 'tour_taille',
+        'taille': 'taille',
+        'tour_taille': 'taille',
+        'bassin': 'bassin',
         'hanche': 'bassin',
-        'longueur_bras': 'long_manche',
-        'arm_length': 'arm_length',
-        'leg_length': 'leg_length',
-        'shoulder_width': 'shoulder_width'
+        'cuisse': 'cuisse',
+        'bras': 'bras',
+        'poignet': 'poignet',
+        'tour_manche': 'bras',
+        'tour de manche': 'bras'
     }
 
     def __init__(self, smpl_vertices: np.ndarray, smpl_faces: np.ndarray = None):
@@ -159,13 +82,13 @@ class MeshMeasurements:
         Permet de couper perpendiculairement au corps même si le mesh est incliné.
         """
         # Indices basés sur BODY_PART_VERTICES
-        # Cou: 5588 (début épaule)
-        neck_idx = 5588
+        # Cou: 4788 (Verified Neck Center)
+        neck_idx = 4788
         
-        # Bassin: Moyenne des indices de 'bassin'
-        pelvis_indices = self.BODY_PART_VERTICES['bassin']['indices']
-        pelvis_pos = np.mean(self.vertices[pelvis_indices], axis=0)
+        # Bassin: 3170 (Verified Hips Center)
+        pelvis_idx = 3170
         
+        pelvis_pos = self.vertices[pelvis_idx]
         neck_pos = self.vertices[neck_idx]
         
         axis = neck_pos - pelvis_pos
@@ -219,8 +142,11 @@ class MeshMeasurements:
             best_perimeter = 0.0
             min_dist_to_origin = float('inf')
             
+            # Pour le torse, on veut rester proche de l'axe central X=0 (SMPL est centré sur X)
+            # plane_origin est le centre des points de repère (landmarks)
+            
             for comp in components:
-                # Calcul périmètre
+                # 3.1 Calcul périmètre
                 current_perimeter = 0.0
                 if hasattr(comp, 'length'):
                     current_perimeter = comp.length
@@ -230,18 +156,55 @@ class MeshMeasurements:
                         dists = np.linalg.norm(pts[1:] - pts[:-1], axis=1)
                         current_perimeter += np.sum(dists)
                 
-                # Vérifier si c'est la bonne composante (la plus proche des landmarks initiaux)
-                # On prend le centre de la composante
+                # Ignorer les bruits (périmètre trop petit)
+                if current_perimeter < 0.05: # < 5cm
+                    continue
+
+                # 3.2 Vérifier la taille et centrage
                 if len(comp.vertices) > 0:
                     comp_center = np.mean(comp.vertices, axis=0)
                     dist = np.linalg.norm(comp_center - plane_origin)
                     
-                    # Heuristique: Si on coupe un bras, la section du torse sera loin de plane_origin (qui est sur le bras)
-                    if dist < min_dist_to_origin:
-                        min_dist_to_origin = dist
-                        best_perimeter = current_perimeter
+                    # Calculer l'étendue X (largeur)
+                    x_min, x_max = np.min(comp.vertices[:, 0]), np.max(comp.vertices[:, 0])
+                    width = x_max - x_min
+                    
+                    if limb_axis:
+                        # --- FILTRE MEMBRES ---
+                        # On doit être TRES proche du landmark central
+                        score = dist 
+                        max_allowed_dist = 0.15 
+                        max_allowed_width = 0.35 # Une cuisse ou un bras ne fait pas 35cm de large
+                        
+                        if dist < max_allowed_dist and width < max_allowed_width:
+                            if score < min_dist_to_origin:
+                                min_dist_to_origin = score
+                                best_perimeter = current_perimeter
+                    else:
+                        # --- FILTRE TORSE ---
+                        # Le torse doit être centré en X. On pénalise les bras.
+                        off_center_penalty = abs(comp_center[0]) * 5.0 
+                        score = dist + off_center_penalty
+                        
+                        # Limites physiques réalistes pour un torse humain (Slicing SMPL)
+                        # Si width > 0.5m, on a probablement inclu les bras/bras collés
+                        if width > 0.48: 
+                             score += 2.0 # Forte pénalité si trop large
+                        
+                        # Si on a plusieurs boucles (torse + 2 bras), on veut la plus grosse mais centrée
+                        # Heuristique : Score inversement proportionnel à la taille si centré
+                        # On cherche le compromisidéal entre "Grosse boucle" et "Centré"
+                        if abs(comp_center[0]) < 0.1 and current_perimeter > 0.5:
+                             # C'est probablement le torse
+                             if current_perimeter < 1.35: # Limite haute raisonnable
+                                 score -= 1.0 # Bonus de confiance
+                        
+                        if dist < 0.35 and score < min_dist_to_origin:
+                            min_dist_to_origin = score
+                            best_perimeter = current_perimeter
             
-            return round(best_perimeter, 2)
+            # On retourne la valeur brute en Mètres
+            return round(best_perimeter, 4)
             
         except Exception as e:
             print(f"Error slicing mesh: {e}")
@@ -270,7 +233,8 @@ class MeshMeasurements:
             v2 = vertices[(i + 1) % len(vertices)]
             total_distance += euclidean(v1, v2)
 
-        return round(total_distance, 2)
+        # Convert m to mm (Actually we remain in meters here, conversion is in app.py)
+        return round(total_distance, 4)
 
     def calculate_distance(self, start_idx: int, end_idx: int) -> float:
         """
@@ -279,7 +243,8 @@ class MeshMeasurements:
         """
         start = self.vertices[start_idx]
         end = self.vertices[end_idx]
-        return round(euclidean(start, end), 2)
+        # Convert m to mm (Actually we remain in meters here, conversion is in app.py)
+        return round(euclidean(start, end), 4)
 
     def get_measurement(self, measurement_name: str) -> float:
         """
