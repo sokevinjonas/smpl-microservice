@@ -410,7 +410,7 @@ def estimate_measurements():
         
         if low_conf:
             return jsonify({
-                'error': 'Visibilité insuffisante',
+                'error': 'Pose non valide, veuillez vous reculer',
                 'message': 'Assurez-vous que vos épaules et vos hanches sont bien visibles.',
                 'details': low_conf
             }), 400
@@ -419,18 +419,18 @@ def estimate_measurements():
         
         if res is None:
             return jsonify({
-                'error': 'Échec Reconstruction 3D',
+                'error': 'Pose non valide, veuillez vous reculer',
                 'message': 'Impossible d\'ajuster le modèle aux photos.'
             }), 400
             
         fitting_loss = res.get('loss', 0.0)
         logger.info(f"Loss finale du fitting: {fitting_loss}")
         
-        # Un bon fitting est généralement < 100 sur notre échelle (squared distance * 100)
-        if fitting_loss > 150: 
+        # Seuil strict demandé par l'utilisateur (0.05)
+        if fitting_loss > 0.05: 
              return jsonify({
-                'error': 'Fitting instable', 
-                'message': 'Photos contradictoires ou pose trop complexe. Gardez les bras légèrement écartés.',
+                'error': 'Pose non valide, veuillez vous reculer', 
+                'message': 'La photo est trop complexe ou la pose est incorrecte.',
                 'loss': fitting_loss
             }), 400
 
