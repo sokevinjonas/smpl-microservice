@@ -272,6 +272,7 @@ def estimate_measurements():
                 
             gender = form_data.get('gender', 'neutral')
             height = form_data.get('height')
+            weight = form_data.get('weight')
             include_mesh = form_data.get('include_mesh') == 'true'
             
         else:
@@ -290,6 +291,7 @@ def estimate_measurements():
             measures_table = data.get('measures_table', [])
             gender = data.get('gender', 'neutral')
             height = data.get('height')
+            weight = data.get('weight')
             include_mesh = data.get('include_mesh', False)
             uploaded_files = []
 
@@ -311,7 +313,19 @@ def estimate_measurements():
                 logger.warning(f"Hauteur ignorée (valeur invalide: {height})")
                 height_m = None
 
-        logger.info(f"Requête reçue (Multipart={is_multipart}): {len(uploaded_files)} fichiers, {len(photos_list)} urls, Genre={gender}, Hauteur={height_m}m, Measures={len(measures_table)}")
+        # Normalisation Poids
+        weight_kg = None
+        if weight is not None:
+            try:
+                weight_kg = float(weight)
+                if weight_kg <= 0 or weight_kg > 300:
+                    logger.warning(f"Poids ignoré (hors limites réalistes: {weight}kg)")
+                    weight_kg = None
+            except ValueError:
+                logger.warning(f"Poids ignoré (valeur invalide: {weight})")
+                weight_kg = None
+
+        logger.info(f"Requête reçue (Multipart={is_multipart}): {len(uploaded_files)} fichiers, {len(photos_list)} urls, Genre={gender}, Hauteur={height_m}m, Poids={weight_kg}kg, Measures={len(measures_table)}")
 
         # Mode fallback (inchangé)
         if use_fallback:
@@ -445,7 +459,7 @@ def estimate_measurements():
                 'details': low_conf
             }), 400
 
-        res = smpl_engine.process_image(image_data_list, gender=gender, height=height_m)
+        res = smpl_engine.process_image(image_data_list, gender=gender, height=height_m, target_weight=weight_kg)
         
         if res is None:
             return jsonify({
@@ -518,7 +532,6 @@ def estimate_measurements():
         except Exception as e:
              logger.warning(f"Failed to log prediction: {e}")
 
-        # Formater la réponse
         response = {
             'prediction_id': prediction_id,
             'measurements': measurements_clean,
@@ -526,6 +539,7 @@ def estimate_measurements():
             'metadata': {
                 'num_views': len(image_data_list),
                 'keypoints_per_view': [len(d['keypoints']) for d in image_data_list],
+                'target_weight_kg': weight_kg,
                 'validation_errors': validation_errors,
                 'mesh_vertices': len(vertices),
                 'mode': 'production' if not use_fallback else 'fallback'

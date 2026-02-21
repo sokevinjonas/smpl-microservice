@@ -159,10 +159,13 @@ class SMPLEngine:
         except:
             return None
 
-    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], image_shapes: list[Tuple[int, int]]) -> Dict:
+    from utils.volume_utils import calculate_mesh_volume_tensor
+
+    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], image_shapes: list[Tuple[int, int]], target_weight: float = None) -> Dict:
         """
         Ajuste le modèle SMPL à plusieurs vues en optimisant pose et shape partagés.
-        Supposition: Vue 0 = Face, Vue 1 = Profil (approx 90 deg)
+        Suppositions: Vue 0 = Face, Vue 1 = Profil (approx 90 deg)
+        Aussi, un target_weight peut être founit pour contraindre le volume 3D.
         """
         if self.smpl_model is None or not keypoints_list:
             return None
@@ -264,7 +267,33 @@ class SMPLEngine:
             loss_beta = torch.mean(betas**2) * 0.1
             loss_pose = torch.mean(body_pose**2) * 0.1
             
-            loss = total_loss + loss_beta + loss_pose
+            # Contrainte de poids (Weight Loss)
+            loss_weight = 0.0
+            if target_weight is not None and target_weight > 0:
+                # Générer le mesh pour la vue face (0) afin d'évaluer le volume
+                # Note: betas/body_pose sont partagés, donc le volume est invariant selon global_orient
+                output_vol = self.smpl_model(
+                    betas=betas,
+                    body_pose=body_pose,
+                    global_orient=global_orients[0],
+                    transl=transl,
+                    return_verts=True
+                )
+                verts_vol = output_vol.vertices
+                faces_vol = torch.tensor(np.array(self.smpl_model.faces, dtype=np.int32), dtype=torch.long, device=self.device)
+                
+                # Calculer le volume matriciel (tensoriel)
+                vol_m3 = calculate_mesh_volume_tensor(verts_vol, faces_vol)
+                # Estimer le poids à partir du volume basé sur la masse volumique humaine standard (1.01 kg/L)
+                estimated_weight = vol_m3 * 1010.0
+                
+                # Pénalité L2 forte sur l'erreur de poids
+                weight_diff = estimated_weight - target_weight
+                # On utilise une perte asymétrique ou L2 classique. Ici L2.
+                # On accorde un grand poids à cette perte (ex: 10.0) pour forcer le respect
+                loss_weight = torch.mean(weight_diff**2) * 10.0
+                
+            loss = total_loss + loss_beta + loss_pose + loss_weight
             
             loss.backward()
             optimizer.step()
@@ -313,10 +342,11 @@ class SMPLEngine:
         
         return vertices
         
-    def process_image(self, image_data_list: list[dict], gender: str = 'neutral', height: float = None) -> Dict:
+    def process_image(self, image_data_list: list[dict], gender: str = 'neutral', height: float = None, target_weight: float = None) -> Dict:
         """
         Traite une ou plusieurs images (Multi-View).
         image_data_list: Liste de dicts {'image': np.array, 'keypoints': np.array}
+        target_weight: Poids corporel cible en kilogrammes.
         """
         # Changer de modèle si nécessaire
         if self.current_gender != gender:
@@ -329,8 +359,8 @@ class SMPLEngine:
         shapes_list = [d['image'].shape[:2] for d in image_data_list]
         
         try:
-            # Appel au nouveau moteur Multi-View
-            smpl_params = self.fit_model_to_multiple_views(keypoints_list, shapes_list)
+            # Appel au nouveau moteur Multi-View avec le paramètre poids
+            smpl_params = self.fit_model_to_multiple_views(keypoints_list, shapes_list, target_weight=target_weight)
             
             if smpl_params is None: # Fallback
                  print("⚠️ Echec fitting Multi-View, utilisation paramètres par défaut (basé sur vue 1)")
