@@ -82,23 +82,42 @@ def sanitize_measurements(measurements, gender='male', height=1.75):
     # Normaliser keys en minuscules pour la sanitization logic interne
     m = {k.lower(): v for k, v in measurements.items()}
     
+    # Prétraitement : Unifier les clés pour la logique de sanitization
+    def get_val(keys):
+        for k in keys:
+            if k in m: return m[k]
+        return 0.0
+
+    poitrine_val = get_val(['poitrine', 'tour_poitrine', 'tour de poitrine'])
+    taille_val = get_val(['taille', 'tour_taille', 'tour de taille'])
+    hanche_val = get_val(['hanche', 'bassin'])
+    bras_val = get_val(['bras', 'tour_manche', 'tour de manche'])
+
     # 1. Poignet
     if m.get('poignet', 0) > 300 or m.get('poignet', 0) < 100: 
         m['poignet'] = avg['poignet']
 
     # 2. Bras (Biceps)
-    if m.get('bras', 0) > 600 or m.get('bras', 0) < 150: 
-        m['bras'] = avg['bras']
-    if m.get('tour_manche', 0) > 600: m['tour_manche'] = avg['bras']
+    if bras_val > 600 or bras_val < 150: 
+        new_bras = avg['bras']
+        for k in ['bras', 'tour_manche', 'tour de manche']:
+            if k in m: m[k] = new_bras
 
     # 3. Torse (Check limits approx)
-    if m.get('poitrine', 0) > 1400 or m.get('poitrine', 0) < 600: m['poitrine'] = avg['poitrine']
-    if m.get('tour_poitrine', 0) > 1400: m['tour_poitrine'] = avg['poitrine']
+    if poitrine_val > 1400 or poitrine_val < 600:
+        new_poi = avg['poitrine']
+        for k in ['poitrine', 'tour_poitrine', 'tour de poitrine']:
+            if k in m: m[k] = new_poi
     
-    if m.get('taille', 0) > 1400 or m.get('taille', 0) < 500: m['taille'] = avg['taille']
-    if m.get('tour_taille', 0) > 1400: m['tour_taille'] = avg['taille']
+    if taille_val > 1400 or taille_val < 500:
+        new_tai = avg['taille']
+        for k in ['taille', 'tour_taille', 'tour de taille']:
+            if k in m: m[k] = new_tai
     
-    if m.get('hanche', 0) > 1600 or m.get('hanche', 0) < 600: m['hanche'] = avg['hanche']
+    if hanche_val > 1600 or hanche_val < 600:
+        new_han = avg['hanche']
+        for k in ['hanche', 'bassin']:
+            if k in m: m[k] = new_han
     
     # 4. Cuisse
     if m.get('cuisse', 0) > 1000 or m.get('cuisse', 0) < 300: m['cuisse'] = avg['cuisse']

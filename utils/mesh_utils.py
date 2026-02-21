@@ -161,45 +161,64 @@ class MeshMeasurements:
                     continue
 
                 # 3.2 Vérifier la taille et centrage
-                if len(comp.vertices) > 0:
+                # 3.2 Vérifier la taille et centrage
+                if len(comp.vertices) > 2:
                     comp_center = np.mean(comp.vertices, axis=0)
                     dist = np.linalg.norm(comp_center - plane_origin)
                     
-                    # Calculer l'étendue X (largeur)
+                    # Dimensions de la boucle
                     x_min, x_max = np.min(comp.vertices[:, 0]), np.max(comp.vertices[:, 0])
+                    z_min, z_max = np.min(comp.vertices[:, 2]), np.max(comp.vertices[:, 2])
                     width = x_max - x_min
+                    depth = max(0.01, z_max - z_min)
+                    
+                    if not limb_axis:
+                        # --- ALGORITHME DE RÉPARATION TORSE (Ignorer les bras de la mesure) ---
+                        # Si la boucle est trop large (> 40cm) ou périmètre > 1.1m
+                        if width > 0.40 or current_perimeter > 1.1:
+                            # Couper strictment les points trop éloignés du centre X
+                            # Max 15cm du centre, ou 80% de la profondeur (corps ovale)
+                            threshold_x = min(0.18, max(0.12, depth * 0.80))
+                            torso_pts = np.array([p for p in comp.vertices if abs(p[0]) <= threshold_x])
+                            
+                            if len(torso_pts) > 10:
+                                from scipy.spatial import ConvexHull
+                                try:
+                                    pts_2d = torso_pts[:, [0, 2]]
+                                    hull = ConvexHull(pts_2d)
+                                    hull_peri = sum(np.linalg.norm(pts_2d[s[0]] - pts_2d[s[1]]) for s in hull.simplices)
+                                    current_perimeter = hull_peri
+                                    
+                                    x_min, x_max = np.min(torso_pts[:, 0]), np.max(torso_pts[:, 0])
+                                    width = x_max - x_min
+                                    comp_center = np.mean(torso_pts, axis=0)
+                                except Exception as e:
+                                    pass
+
+                    # Compacité (Roundness) recalculée
+                    area_ellipse = (width * depth) * np.pi / 4.0
+                    compactness = (4.0 * np.pi * area_ellipse) / (current_perimeter ** 2) if current_perimeter > 0 else 0
                     
                     if limb_axis:
                         # --- FILTRE MEMBRES ---
-                        # On doit être TRES proche du landmark central
                         score = dist 
-                        max_allowed_dist = 0.15 
-                        max_allowed_width = 0.35 # Une cuisse ou un bras ne fait pas 35cm de large
-                        
-                        if dist < max_allowed_dist and width < max_allowed_width:
+                        # Un membre doit être TRÈS proche du landmark (10cm max) et pas trop large (25cm max)
+                        if dist < 0.12 and width < 0.28:
                             if score < min_dist_to_origin:
                                 min_dist_to_origin = score
                                 best_perimeter = current_perimeter
                     else:
                         # --- FILTRE TORSE ---
-                        # Le torse doit être centré en X. On pénalise les bras.
-                        off_center_penalty = abs(comp_center[0]) * 5.0 
-                        score = dist + off_center_penalty
+                        off_center_x = abs(comp_center[0])
+                        score = off_center_x * 5.0
                         
-                        # Limites physiques réalistes pour un torse humain (Slicing SMPL)
-                        # Si width > 0.5m, on a probablement inclu les bras/bras collés
-                        if width > 0.48: 
-                             score += 2.0 # Forte pénalité si trop large
+                        is_likely_fused = (width > 0.45) or (width / depth > 2.0)
+                        if is_likely_fused: score += 20.0
                         
-                        # Si on a plusieurs boucles (torse + 2 bras), on veut la plus grosse mais centrée
-                        # Heuristique : Score inversement proportionnel à la taille si centré
-                        # On cherche le compromisidéal entre "Grosse boucle" et "Centré"
-                        if abs(comp_center[0]) < 0.1 and current_perimeter > 0.5:
-                             # C'est probablement le torse
-                             if current_perimeter < 1.35: # Limite haute raisonnable
-                                 score -= 1.0 # Bonus de confiance
+                        if 0.5 < current_perimeter < 1.25:
+                             if compactness > 0.6: score -= 5.0
                         
-                        if dist < 0.35 and score < min_dist_to_origin:
+                        if off_center_x < 0.15 and score < min_dist_to_origin:
                             min_dist_to_origin = score
                             best_perimeter = current_perimeter
             
