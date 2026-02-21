@@ -1,4 +1,14 @@
 import numpy as np
+
+# Patch pour compatibilité NumPy >= 1.24 avec les vieilles libs (chumpy/smplx)
+for name, target in [('bool', bool), ('int', int), ('float', float), 
+                    ('complex', complex), ('object', object), ('str', str),
+                    ('unicode', str), ('long', int)]:
+    if not hasattr(np, name):
+        setattr(np, name, target)
+if not hasattr(np, 'typeDict'):
+    np.typeDict = np.sctypeDict
+
 from typing import Dict
 from pathlib import Path
 import torch

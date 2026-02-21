@@ -38,6 +38,72 @@ class MeshMeasurements:
             'indices': [2096],
             'axis_indices': [1723, 2096], # Elbow -> Wrist
             'description': 'Tour de poignet'
+        },
+        'cou': { # Tour de cou
+            'indices': [3026],
+            'description': 'Tour de cou'
+        },
+        'mollet': { # Tour de mollet (Gauche)
+            'indices': [3292],
+            'axis_indices': [1010, 3292], # Knee -> Ankle
+            'description': 'Tour de mollet'
+        },
+        'cheville': { # Tour de cheville (G)
+            'indices': [3307],
+            'axis_indices': [3292, 3307],
+            'description': 'Tour de cheville'
+        },
+        'avant_bras': { # Avant-bras (G)
+            'indices': [2145],
+            'axis_indices': [1723, 2145],
+            'description': 'Tour d\'avant-bras'
+        },
+        'entrejambe': { # Longueur jambe (Crotch to Floor)
+            'type': 'distance',
+            'indices': [3500, 3387], # Crotch -> Heel
+            'description': 'Longueur entrejambe'
+        },
+        'longueur_manche': { # Epaule -> Poignet
+            'type': 'distance',
+            'indices': [636, 2096], 
+            'description': 'Longueur de manche'
+        },
+        'largeur_epaules': { # Epaule à Epaule
+            'type': 'distance',
+            'indices': [636, 4110], # Left -> Right Acromion
+            'description': 'Largeur d\'épaules'
+        },
+        'genou': { # Tour de genou (G)
+            'indices': [1010],
+            'description': 'Tour de genou'
+        },
+        'tete': { # Tour de tête
+            'indices': [411],
+            'description': 'Tour de tête'
+        },
+        'sous_poitrine': { # Tour sous-poitrine
+            'indices': [3021],
+            'description': 'Tour sous-poitrine'
+        },
+        'longueur_jambe': { # Hanche à Sol
+            'type': 'distance',
+            'indices': [3170, 3387],
+            'description': 'Longueur de jambe totale'
+        },
+        'largeur_pectoral': { # Largeur de poitrine
+            'type': 'distance',
+            'indices': [3015, 6500], # approx left/right pectoral
+            'description': 'Largeur pectorale'
+        },
+        'largeur_dos': { # Largeur du dos
+            'type': 'distance',
+            'indices': [3021, 6510],
+            'description': 'Largeur du dos'
+        },
+        'hauteur_torse': { # Epaule à Taille
+            'type': 'distance',
+            'indices': [636, 3502],
+            'description': 'Hauteur du torse'
         }
     }
 
@@ -52,8 +118,21 @@ class MeshMeasurements:
         'cuisse': 'cuisse',
         'bras': 'bras',
         'poignet': 'poignet',
-        'tour_manche': 'bras',
-        'tour de manche': 'bras'
+        'cou': 'cou',
+        'mollet': 'mollet',
+        'cheville': 'cheville',
+        'avant_bras': 'avant_bras',
+        'entrejambe': 'entrejambe',
+        'longueur_manche': 'longueur_manche',
+        'largeur_epaules': 'largeur_epaules',
+        'genou': 'genou',
+        'tete': 'tete',
+        'sous_poitrine': 'sous_poitrine',
+        'longueur_jambe': 'longueur_jambe',
+        'largeur_pectoral': 'largeur_pectoral',
+        'largeur_dos': 'largeur_dos',
+        'hauteur_torse': 'hauteur_torse',
+        'tour_manche': 'bras'
     }
 
     def __init__(self, smpl_vertices: np.ndarray, smpl_faces: np.ndarray = None):
@@ -166,19 +245,21 @@ class MeshMeasurements:
                     comp_center = np.mean(comp.vertices, axis=0)
                     dist = np.linalg.norm(comp_center - plane_origin)
                     
-                    # Dimensions de la boucle
+                    # 3.4 Dimensions précises de la boucle
                     x_min, x_max = np.min(comp.vertices[:, 0]), np.max(comp.vertices[:, 0])
-                    z_min, z_max = np.min(comp.vertices[:, 2]), np.max(comp.vertices[:, 2])
                     width = x_max - x_min
-                    depth = max(0.01, z_max - z_min)
+                    
+                    # Pour la profondeur (Z), le bounding box est faussé si le plan est incliné.
+                    # On utilise l'écart type des points par rapport au centre pour estimer le "rayon" Z
+                    z_centered = comp.vertices[:, 2] - comp_center[2]
+                    depth_approx = np.mean(np.abs(z_centered)) * 4.0 # Diamètre approx
+                    depth = max(0.01, depth_approx)
                     
                     if not limb_axis:
-                        # --- ALGORITHME DE RÉPARATION TORSE (Ignorer les bras de la mesure) ---
-                        # Si la boucle est trop large (> 40cm) ou périmètre > 1.1m
+                        # --- ALGORITHME DE RÉPARATION TORSE (Ignorer les bras) ---
                         if width > 0.40 or current_perimeter > 1.1:
-                            # Couper strictment les points trop éloignés du centre X
-                            # Max 15cm du centre, ou 80% de la profondeur (corps ovale)
-                            threshold_x = min(0.18, max(0.12, depth * 0.80))
+                            # Plus permissif sur l'avant du corps
+                            threshold_x = 0.17 # 17cm max du centre X
                             torso_pts = np.array([p for p in comp.vertices if abs(p[0]) <= threshold_x])
                             
                             if len(torso_pts) > 10:
@@ -195,15 +276,15 @@ class MeshMeasurements:
                                 except Exception as e:
                                     pass
 
-                    # Compacité (Roundness) recalculée
+                    # 3.5 Compacité (Roundness) recalculée avec les vraies dimensions
                     area_ellipse = (width * depth) * np.pi / 4.0
                     compactness = (4.0 * np.pi * area_ellipse) / (current_perimeter ** 2) if current_perimeter > 0 else 0
                     
                     if limb_axis:
                         # --- FILTRE MEMBRES ---
                         score = dist 
-                        # Un membre doit être TRÈS proche du landmark (10cm max) et pas trop large (25cm max)
-                        if dist < 0.12 and width < 0.28:
+                        # On assouplit légèrement pour ne pas rater les membres
+                        if dist < 0.20 and width < 0.35:
                             if score < min_dist_to_origin:
                                 min_dist_to_origin = score
                                 best_perimeter = current_perimeter
@@ -212,11 +293,12 @@ class MeshMeasurements:
                         off_center_x = abs(comp_center[0])
                         score = off_center_x * 5.0
                         
-                        is_likely_fused = (width > 0.45) or (width / depth > 2.0)
+                        is_likely_fused = (width > 0.50) or (width / depth > 2.5)
                         if is_likely_fused: score += 20.0
                         
-                        if 0.5 < current_perimeter < 1.25:
-                             if compactness > 0.6: score -= 5.0
+                        if 0.5 < current_perimeter < 1.3:
+                             # On demande une compacité raisonnable (0.4 = ellipse assez plate, 1.0 = cercle)
+                             if compactness > 0.4: score -= 5.0
                         
                         if off_center_x < 0.15 and score < min_dist_to_origin:
                             min_dist_to_origin = score
@@ -290,24 +372,24 @@ class MeshMeasurements:
         part_info = self.BODY_PART_VERTICES.get(body_part, {})
 
         measurement_value = 0.0
+        part_type = part_info.get('type', 'circumference')
 
-        if 'indices' in part_info:
+        if part_type == 'circumference' and 'indices' in part_info:
             # Mesure de circonférence
-            # Gestion de l'orientation spécifique (pour bras/jambes)
             axis_indices = part_info.get('axis_indices')
             measurement_value = self.calculate_slice_circumference(part_info['indices'], limb_axis=axis_indices)
+        
+        elif part_type == 'distance' and 'indices' in part_info:
+            # Mesure de distance entre 2 points (ex: longueur jambe)
+            if len(part_info['indices']) >= 2:
+                measurement_value = self.calculate_distance(
+                    part_info['indices'][0],
+                    part_info['indices'][1]
+                )
+        
         elif 'start' in part_info and 'end' in part_info:
-            # Mesure de distance
-            measurement_value = self.calculate_distance(
-                part_info['start'],
-                part_info['end']
-            )
-        elif 'left' in part_info and 'right' in part_info:
-            # Mesure de largeur
-            measurement_value = self.calculate_distance(
-                part_info['left'],
-                part_info['right']
-            )
+            # Rétrocompatibilité distance
+            measurement_value = self.calculate_distance(part_info['start'], part_info['end'])
 
         # Cacher le résultat
         self.measurements_cache[key] = measurement_value

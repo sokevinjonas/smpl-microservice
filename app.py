@@ -93,6 +93,26 @@ def sanitize_measurements(measurements, gender='male', height=1.75):
     hanche_val = get_val(['hanche', 'bassin'])
     bras_val = get_val(['bras', 'tour_manche', 'tour de manche'])
 
+    # 7. Mollet / Cheville
+    if m.get('mollet', 0) > 600 or m.get('mollet', 0) < 200:
+        m['mollet'] = 360 * scale
+    if m.get('cheville', 0) > 400 or m.get('cheville', 0) < 150:
+        m['cheville'] = 220 * scale
+
+    # 8. Cou / Tête
+    if m.get('cou', 0) > 600 or m.get('cou', 0) < 250:
+        m['cou'] = 380 * scale
+    if m.get('tete', 0) > 800 or m.get('tete', 0) < 400:
+        m['tete'] = 560 * scale
+
+    # 9. Genou
+    if m.get('genou', 0) > 600 or m.get('genou', 0) < 250:
+        m['genou'] = 380 * scale
+
+    # 10. Longueurs (Simple clamp for sanity)
+    if m.get('entrejambe', 0) > 1200: m['entrejambe'] = 820 * scale
+    if m.get('longueur_manche', 0) > 1000: m['longueur_manche'] = 600 * scale
+
     # 1. Poignet
     if m.get('poignet', 0) > 300 or m.get('poignet', 0) < 100: 
         m['poignet'] = avg['poignet']
@@ -244,15 +264,16 @@ def estimate_measurements():
             return jsonify({'error': 'measures_table vide'}), 400
             
         # Normalisation Hauteur
+        height_m = None
         if height is not None:
             try:
-                height = float(height)
-                if height > 3.0: height = height / 100.0
+                height_m = float(height)
+                if height_m > 3.0: height_m = height_m / 100.0 # Convert cm to m
             except ValueError:
                 logger.warning(f"Hauteur ignorée (valeur invalide: {height})")
-                height = None
+                height_m = None
 
-        logger.info(f"Requête reçue (Multipart={is_multipart}): {len(uploaded_files)} fichiers, {len(photos_list)} urls, Genre={gender}, Hauteur={height}m, Measures={len(measures_table)}")
+        logger.info(f"Requête reçue (Multipart={is_multipart}): {len(uploaded_files)} fichiers, {len(photos_list)} urls, Genre={gender}, Hauteur={height_m}m, Measures={len(measures_table)}")
 
         # Mode fallback (inchangé)
         if use_fallback:
@@ -369,46 +390,50 @@ def estimate_measurements():
         logger.info(f"Traitement de {len(image_data_list)} vues validées")
 
         # Étape 3: Générer le mesh SMPL (Multi-View)
-        # On passe la liste des dicts préparés
-        mesh_data = smpl_engine.process_image(image_data_list, gender=gender, height=height)
+        # 🛡️ POSE GUARD: Contrôle Qualité
+        critical_landmarks = [11, 12, 23, 24] # Épaules, Hanches
         
-        if mesh_data is None:
-            logger.error("Échec de la génération du mesh SMPL")
+        all_kps = [img_data['keypoints'] for img_data in image_data_list]
+        low_conf = []
+        for i, kps in enumerate(all_kps):
+            for lm_idx in critical_landmarks:
+                if kps[lm_idx, 2] < 0.4: # Seuil visibilité MediaPipe
+                    low_conf.append(f"Image {i+1} : Point {lm_idx}")
+        
+        if low_conf:
             return jsonify({
-                'error': 'Échec de la génération du mesh 3D',
-                'code': 'MESH_GENERATION_FAILED'
-            }), 500
-
-        # Vérification de la cohérence géométrique (Identity / Pose Check)
-        # Si la loss est très élevée, cela signifie que le modèle n'arrive pas à satisfaire les 2 vues
-        # Seuil empirique (à ajuster selon logs):
-        # - Bon fitting: < 1.0 (souvent négatif si likelihood, mais ici squared error positiv... à vérifier logs)
-        # - Mauvais fitting: > 10.0 ou 100.0
-        # ATTENTION: Mes logs précédents montraient une loss négative (-8000). C'est très étrange pour une MSE.
-        # Probablement un terme de likelihood (log-prob) caché ou un bug d'affichage.
-        # JE VAIS AFFICHER LA LOSS BRUTE DANS LES LOGS POUR CALIBRER.
-        # Pour l'instant, je mets un seuil "Safe" très haut pour éviter les faux positifs, 
-        # mais suffisant pour bloquer les aberrations extrêmes.
-        final_loss = mesh_data.get('loss', 0.0)
-        logger.info(f"Loss finale du fitting: {final_loss}")
-        
-        # TODO: Calibrer ce seuil avec des exemples réels.
-        # Si c'est une MSE pure * 100, ça devrait être positif.
-        # Si c'est négatif, c'est qu'il y a un terme -LogLikelihood.
-        # On va supposer que si c'est > 10000 (positif), c'est une explosion.
-        if final_loss > 100000.0:  
-             return jsonify({
-                'error': 'Incohérence géométrique détectée. Les photos semblent incompatibles (personnes différentes ou poses incorrectes).',
-                'code': 'GEOMETRIC_INCONSISTENCY',
-                'details': {'loss': final_loss}
+                'error': 'Visibilité insuffisante',
+                'message': 'Assurez-vous que vos épaules et vos hanches sont bien visibles.',
+                'details': low_conf
             }), 400
 
-        vertices = mesh_data['vertices']
+        res = smpl_engine.process_image(image_data_list, gender=gender, height=height_m)
+        
+        if res is None:
+            return jsonify({
+                'error': 'Échec Reconstruction 3D',
+                'message': 'Impossible d\'ajuster le modèle aux photos.'
+            }), 400
+            
+        fitting_loss = res.get('loss', 0.0)
+        logger.info(f"Loss finale du fitting: {fitting_loss}")
+        
+        # Un bon fitting est généralement < 100 sur notre échelle (squared distance * 100)
+        if fitting_loss > 150: 
+             return jsonify({
+                'error': 'Fitting instable', 
+                'message': 'Photos contradictoires ou pose trop complexe. Gardez les bras légèrement écartés.',
+                'loss': fitting_loss
+            }), 400
 
-        logger.info(f"Mesh généré avec {mesh_data['n_vertices']} vertices")
+        vertices = res['vertices']
+        faces = res['faces']
+        smpl_params = res['smpl_params']
+
+        logger.info(f"Mesh généré avec {len(vertices)} vertices")
 
         # Étape 4: Extraire les mensurations
-        mesh_measurements = MeshMeasurements(vertices, mesh_data['faces'])
+        mesh_measurements = MeshMeasurements(vertices, faces)
         measurements = mesh_measurements.get_all_measurements(measures_table)
 
         # Valider les mensurations
@@ -419,7 +444,7 @@ def estimate_measurements():
         # Exporter le mesh si demandé
         mesh_url = None
         if include_mesh:
-             mesh_obj_content = export_mesh_to_obj(vertices, mesh_data['faces'])
+             mesh_obj_content = export_mesh_to_obj(vertices, faces)
              filename = f"mesh_{uuid.uuid4()}.obj"
              filepath = os.path.join(OUTPUT_FOLDER, filename)
              with open(filepath, 'w') as f:
