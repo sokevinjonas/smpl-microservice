@@ -137,7 +137,9 @@ class PoseEstimator:
                 keypoints = []
                 confidences = []
                 for landmark in results.pose_landmarks.landmark:
-                    keypoints.append([landmark.x, landmark.y, landmark.z])
+                    # On stocke la visibilité directement dans la 3ème colonne
+                    # car smpl_engine l'utilise comme poids.
+                    keypoints.append([landmark.x, landmark.y, landmark.visibility])
                     confidences.append(landmark.visibility)
                     
                 return {
@@ -166,8 +168,11 @@ class PoseEstimator:
                 confidences = []
                 
                 for landmark in landmarks:
-                    keypoints.append([landmark.x, landmark.y, landmark.z])
-                    confidences.append(landmark.presence)  # ou visibility selon la version
+                    # Tasks API 0.10+ utilise .visibility et .presence
+                    # On utilise visibility qui est plus représentatif de la détection 'clean'
+                    vis = getattr(landmark, 'visibility', getattr(landmark, 'presence', 0.0))
+                    keypoints.append([landmark.x, landmark.y, vis])
+                    confidences.append(vis)
                     
                 return {
                     'keypoints': np.array(keypoints),

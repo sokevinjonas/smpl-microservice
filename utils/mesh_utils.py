@@ -55,7 +55,7 @@ class MeshMeasurements:
         },
         'avant_bras': { # Avant-bras (G)
             'indices': [2145],
-            'axis_indices': [1723, 2145],
+            'axis_indices': [1723, 2096], # Elbow -> Wrist
             'description': 'Tour d\'avant-bras'
         },
         'entrejambe': { # Longueur jambe (Crotch to Floor)
@@ -74,7 +74,7 @@ class MeshMeasurements:
             'description': 'Largeur d\'épaules'
         },
         'genou': { # Tour de genou (G)
-            'indices': [1010],
+            'indices': [1100], # Distinct from Thigh 1010
             'description': 'Tour de genou'
         },
         'tete': { # Tour de tête
@@ -311,13 +311,13 @@ class MeshMeasurements:
             print(f"Error slicing mesh: {e}")
             return 0.0
 
-    def calculate_circumference(self, vertex_indices: List[int]) -> float:
+    def calculate_circumference(self, vertex_indices: List[int], limb_axis: List[int] = None) -> float:
         """
         Calcule une circonférence. Essaie le slicing d'abord, sinon fallback sur vertices.
         """
         # Tenter le slicing si on a le mesh et assez de points pour définir une hauteur
         if self.mesh is not None and len(vertex_indices) > 0:
-            val = self.calculate_slice_circumference(vertex_indices)
+            val = self.calculate_slice_circumference(vertex_indices, limb_axis=limb_axis)
             if val > 0:
                 return val
         
@@ -376,8 +376,9 @@ class MeshMeasurements:
 
         if part_type == 'circumference' and 'indices' in part_info:
             # Mesure de circonférence
+            # NOTE: On utilise calculate_circumference car il gère le fallback si le slicing échoue
             axis_indices = part_info.get('axis_indices')
-            measurement_value = self.calculate_slice_circumference(part_info['indices'], limb_axis=axis_indices)
+            measurement_value = self.calculate_circumference(part_info['indices'], limb_axis=axis_indices)
         
         elif part_type == 'distance' and 'indices' in part_info:
             # Mesure de distance entre 2 points (ex: longueur jambe)

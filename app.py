@@ -75,8 +75,12 @@ def sanitize_measurements(measurements, gender='male', height=1.75):
     ref = averages[gender]
     
     # Adapter les moyennes par rapport à la taille (Proportionnel)
-    h_target = height or ref['height']
-    scale = h_target / ref['height']
+    try:
+        h_val = float(height) if height else ref['height']
+    except:
+        h_val = ref['height']
+        
+    scale = h_val / ref['height']
     avg = {k: v * scale for k, v in ref.items() if k != 'height'}
     
     # Normaliser keys en minuscules pour la sanitization logic interne
@@ -101,13 +105,17 @@ def sanitize_measurements(measurements, gender='male', height=1.75):
 
     # 8. Cou / Tête
     if m.get('cou', 0) > 600 or m.get('cou', 0) < 250:
-        m['cou'] = 380 * scale
+        m['cou'] = 370 * scale # Distinct from knee
     if m.get('tete', 0) > 800 or m.get('tete', 0) < 400:
         m['tete'] = 560 * scale
 
     # 9. Genou
     if m.get('genou', 0) > 600 or m.get('genou', 0) < 250:
-        m['genou'] = 380 * scale
+        m['genou'] = 390 * scale
+
+    # 10. Avant-bras
+    if m.get('avant_bras', 0) > 450 or m.get('avant_bras', 0) < 150:
+        m['avant_bras'] = 260 * scale
 
     # 10. Longueurs (Simple clamp for sanity)
     if m.get('entrejambe', 0) > 1200: m['entrejambe'] = 820 * scale
@@ -460,7 +468,7 @@ def estimate_measurements():
         measurements_clean = {k.strip(' "[]\''): round(v * 1000.0, 1) for k, v in measurements.items()}
         
         # Appliquer la correction des valeurs impossibles (sanitize_measurements attend des mm)
-        measurements_clean = sanitize_measurements(measurements_clean, gender, height=height)
+        measurements_clean = sanitize_measurements(measurements_clean, gender, height=height_m)
 
         # Générer un ID unique pour cette prédiction (pour le feedback)
         prediction_id = str(uuid.uuid4())
