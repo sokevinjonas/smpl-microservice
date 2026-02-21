@@ -107,33 +107,55 @@ class MeshMeasurements:
         }
     }
 
-    # Correspondance des noms de mesures demandées (Exact user strings normalized)
+    # Correspondance des noms de mesures demandées (Synonymes & French labels)
     MEASUREMENT_MAPPING = {
-        'poitrine': 'poitrine',
-        'tour_poitrine': 'poitrine',
-        'taille': 'taille',
-        'tour_taille': 'taille',
-        'bassin': 'bassin',
-        'hanche': 'bassin',
-        'cuisse': 'cuisse',
-        'bras': 'bras',
-        'poignet': 'poignet',
-        'cou': 'cou',
-        'mollet': 'mollet',
-        'cheville': 'cheville',
-        'avant_bras': 'avant_bras',
-        'entrejambe': 'entrejambe',
-        'longueur_manche': 'longueur_manche',
-        'largeur_epaules': 'largeur_epaules',
-        'genou': 'genou',
-        'tete': 'tete',
-        'sous_poitrine': 'sous_poitrine',
-        'longueur_jambe': 'longueur_jambe',
-        'largeur_pectoral': 'largeur_pectoral',
-        'largeur_dos': 'largeur_dos',
-        'hauteur_torse': 'hauteur_torse',
-        'tour_manche': 'bras'
-    }
+            # Circonférences
+            'poitrine': 'poitrine',
+            'tour_poitrine': 'poitrine',
+            'tour_de_poitrine': 'poitrine',
+            'taille': 'taille',
+            'tour_taille': 'taille',
+            'tour_de_taille': 'taille',
+            'ceinture': 'taille',
+            'bassin': 'bassin',
+            'hanche': 'bassin',
+            'tour_de_bassin': 'bassin',
+            'cuisse': 'cuisse',
+            'bras': 'bras',
+            'tour_manche': 'bras',
+            'tour_de_manche': 'bras',
+            'poignet': 'poignet',
+            'cou': 'cou',
+            'mollet': 'mollet',
+            'cheville': 'cheville',
+            'bas': 'cheville', # Souvent le bas du pantalon match la cheville
+            'avant_bras': 'avant_bras',
+            'genou': 'genou',
+            'tete': 'tete',
+            'sous_poitrine': 'sous_poitrine',
+            
+            # Longueurs / Distances
+            'entrejambe': 'entrejambe',
+            'long_pantalon': 'entrejambe',
+            'longueur_manche': 'longueur_manche',
+            'long_manche': 'longueur_manche',
+            'largeur_epaules': 'largeur_epaules',
+            'epaule': 'largeur_epaules',
+            'longueur_jambe': 'longueur_jambe',
+            'long_jupe': 'longueur_jambe',
+            'long_robe': 'longueur_jambe', # Approximation
+            'long_chemise': 'hauteur_torse', # Approximation
+            'long_camisole': 'hauteur_torse', # Approximation
+            'hauteur_torse': 'hauteur_torse',
+            'long_taille': 'hauteur_torse',
+            'largeur_pectoral': 'largeur_pectoral',
+            'largeur_dos': 'largeur_dos',
+            'dos': 'largeur_dos',
+            
+            # Autres synonymes potentiels
+            'tour_emanchure': 'bras', # Proxy
+            'pinces': 'taille' # Proxy (Dart location is near waist)
+        }
 
     def __init__(self, smpl_vertices: np.ndarray, smpl_faces: np.ndarray = None):
         """
@@ -361,8 +383,8 @@ class MeshMeasurements:
         Returns:
             Valeur de la mesure en mm
         """
-        # Normaliser le nom
-        key = measurement_name.lower().strip()
+        # Normaliser le nom : minuscule, strip et remplacer les espaces par des underscores
+        key = measurement_name.lower().strip().replace(' ', '_')
 
         # Vérifier le cache
         if key in self.measurements_cache:
