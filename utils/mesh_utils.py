@@ -146,6 +146,7 @@ class MeshMeasurements:
         self.vertices = smpl_vertices
         self.faces = smpl_faces
         self.measurements_cache = {}
+        self.visual_paths = {} # Stocke les points 3D pour l'affichage JSON
         
         # Init Trimesh object if faces provided
         self.mesh = None
@@ -219,6 +220,7 @@ class MeshMeasurements:
                 components = [slice_section]
 
             best_perimeter = 0.0
+            best_points = []
             min_dist_to_origin = float('inf')
             
             # Pour le torse, on veut rester proche de l'axe central X=0 (SMPL est centré sur X)
@@ -288,6 +290,7 @@ class MeshMeasurements:
                             if score < min_dist_to_origin:
                                 min_dist_to_origin = score
                                 best_perimeter = current_perimeter
+                                best_points = comp.vertices.tolist()
                     else:
                         # --- FILTRE TORSE ---
                         off_center_x = abs(comp_center[0])
@@ -298,32 +301,32 @@ class MeshMeasurements:
                         
                         if 0.5 < current_perimeter < 1.3:
                              # On demande une compacité raisonnable (0.4 = ellipse assez plate, 1.0 = cercle)
-                             if compactness > 0.4: score -= 5.0
-                        
-                        if off_center_x < 0.15 and score < min_dist_to_origin:
-                            min_dist_to_origin = score
-                            best_perimeter = current_perimeter
+                             if compactness > 0.4:
+                                if score < min_dist_to_origin:
+                                    min_dist_to_origin = score
+                                    best_perimeter = current_perimeter
+                                    best_points = comp.vertices.tolist()
             
             # On retourne la valeur brute en Mètres
-            return round(best_perimeter, 4)
+            return round(best_perimeter, 4), best_points
             
         except Exception as e:
             print(f"Error slicing mesh: {e}")
-            return 0.0
+            return 0.0, []
 
-    def calculate_circumference(self, vertex_indices: List[int], limb_axis: List[int] = None) -> float:
+    def calculate_circumference(self, vertex_indices: List[int], limb_axis: List[int] = None) -> Tuple[float, List]:
         """
         Calcule une circonférence. Essaie le slicing d'abord, sinon fallback sur vertices.
         """
         # Tenter le slicing si on a le mesh et assez de points pour définir une hauteur
         if self.mesh is not None and len(vertex_indices) > 0:
-            val = self.calculate_slice_circumference(vertex_indices, limb_axis=limb_axis)
+            val, points = self.calculate_slice_circumference(vertex_indices, limb_axis=limb_axis)
             if val > 0:
-                return val
+                return val, points
         
         # Fallback méthode naïve (périmètre zigzag)
         if len(vertex_indices) < 2:
-            return 0.0
+            return 0.0, []
 
         vertices = self.vertices[vertex_indices]
         total_distance = 0.0
@@ -335,9 +338,9 @@ class MeshMeasurements:
             total_distance += euclidean(v1, v2)
 
         # Convert m to mm (Actually we remain in meters here, conversion is in app.py)
-        return round(total_distance, 4)
+        return round(total_distance, 4), vertices.tolist()
 
-    def calculate_distance(self, start_idx: int, end_idx: int) -> float:
+    def calculate_distance(self, start_idx: int, end_idx: int) -> Tuple[float, List]:
         """
         Calcule la distance géodésique (TODO) ou euclidienne.
         Pour l'instant Euclidienne.
@@ -345,7 +348,8 @@ class MeshMeasurements:
         start = self.vertices[start_idx]
         end = self.vertices[end_idx]
         # Convert m to mm (Actually we remain in meters here, conversion is in app.py)
-        return round(euclidean(start, end), 4)
+        dist = round(euclidean(start, end), 4)
+        return dist, [start.tolist(), end.tolist()]
 
     def get_measurement(self, measurement_name: str) -> float:
         """
@@ -372,44 +376,53 @@ class MeshMeasurements:
         part_info = self.BODY_PART_VERTICES.get(body_part, {})
 
         measurement_value = 0.0
+        points = [] # Initialize points list
         part_type = part_info.get('type', 'circumference')
 
         if part_type == 'circumference' and 'indices' in part_info:
             # Mesure de circonférence
             # NOTE: On utilise calculate_circumference car il gère le fallback si le slicing échoue
             axis_indices = part_info.get('axis_indices')
-            measurement_value = self.calculate_circumference(part_info['indices'], limb_axis=axis_indices)
+            measurement_value, points = self.calculate_circumference(part_info['indices'], limb_axis=axis_indices)
+            self.visual_paths[key] = points
         
         elif part_type == 'distance' and 'indices' in part_info:
             # Mesure de distance entre 2 points (ex: longueur jambe)
             if len(part_info['indices']) >= 2:
-                measurement_value = self.calculate_distance(
+                measurement_value, points = self.calculate_distance(
                     part_info['indices'][0],
                     part_info['indices'][1]
                 )
+                self.visual_paths[key] = points
         
         elif 'start' in part_info and 'end' in part_info:
             # Rétrocompatibilité distance
-            measurement_value = self.calculate_distance(part_info['start'], part_info['end'])
+            measurement_value, points = self.calculate_distance(part_info['start'], part_info['end'])
+            self.visual_paths[key] = points
 
         # Cacher le résultat
         self.measurements_cache[key] = measurement_value
         return measurement_value
 
-    def get_all_measurements(self, measurement_names: List[str]) -> Dict[str, float]:
+    def get_all_measurements(self, measures_table: List[str] = None, include_paths: bool = False) -> Dict:
         """
-        Calcule plusieurs mensurations à la fois.
-
-        Args:
-            measurement_names: Liste des noms de mesures
-
-        Returns:
-            Dict avec {nom_mesure: valeur}
+        Récupère toutes les mesures spécifiées.
         """
-        measurements = {}
-        for name in measurement_names:
-            measurements[name] = self.get_measurement(name)
-        return measurements
+        if not measures_table:
+            # Mesures par défaut si vide
+            measures_table = ['poitrine', 'taille', 'hanche']
+
+        results = {}
+        for m_name in measures_table:
+            val = self.get_measurement(m_name)
+            results[m_name] = val
+
+        if include_paths:
+            return {
+                'values': results,
+                'paths': self.visual_paths
+            }
+        return results
 
     def scale_measurements(self, scale_factor: float, measurements: Dict[str, float]) -> Dict[str, float]:
         """

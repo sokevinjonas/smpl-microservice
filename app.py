@@ -243,6 +243,7 @@ def estimate_measurements():
             gender = form_data.get('gender', 'neutral')
             height = form_data.get('height')
             include_mesh = form_data.get('include_mesh') == 'true'
+            include_visual_paths = form_data.get('include_visual_paths') == 'true'
             
         else:
             # Mode JSON standard
@@ -261,6 +262,7 @@ def estimate_measurements():
             gender = data.get('gender', 'neutral')
             height = data.get('height')
             include_mesh = data.get('include_mesh', False)
+            include_visual_paths = data.get('include_visual_paths', False)
             uploaded_files = []
 
         if not photos_list and not uploaded_files:
@@ -442,7 +444,14 @@ def estimate_measurements():
 
         # Étape 4: Extraire les mensurations
         mesh_measurements = MeshMeasurements(vertices, faces)
-        measurements = mesh_measurements.get_all_measurements(measures_table)
+        res_measurements = mesh_measurements.get_all_measurements(measures_table, include_paths=include_visual_paths)
+        
+        if include_visual_paths:
+            measurements = res_measurements['values']
+            visual_paths = res_measurements['paths']
+        else:
+            measurements = res_measurements
+            visual_paths = {}
 
         # Valider les mensurations
         is_valid, errors = validate_measurements(measurements)
@@ -492,6 +501,7 @@ def estimate_measurements():
         response = {
             'prediction_id': prediction_id,
             'measurements': measurements_clean,
+            'visual_paths': visual_paths if include_visual_paths else None,
             'mesh_url': mesh_url,
             'metadata': {
                 'num_views': len(image_data_list),
