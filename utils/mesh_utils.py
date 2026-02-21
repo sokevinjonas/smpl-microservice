@@ -12,95 +12,95 @@ class MeshMeasurements:
     # Correspondance des keypoints SMPL avec les mesures corporelles (Tailoring)
     # Indices approximatifs basés sur la topologie SMPL
     BODY_PART_VERTICES = {
-        'poitrine': { # Tour de poitrine
-            'indices': [3015], # Verified Chest Level
+        'poitrine': { 
+            'indices': [3015, 3016, 3017], # Ring points for better fallback
             'description': 'Tour de poitrine'
         },
-        'taille': { # Tour de taille
-            'indices': [3502], # Verified Waist Level
+        'taille': { 
+            'indices': [3502, 3503, 3504], 
             'description': 'Tour de taille'
         },
-        'bassin': { # Tour de bassin/hanches
-            'indices': [3170], # Verified Hips Level
+        'bassin': { 
+            'indices': [3170, 3171, 3172],
             'description': 'Tour de bassin'
         },
-        'cuisse': { # Tour de cuisse (Cuisse Gauche)
-            'indices': [1010], 
-            'axis_indices': [3170, 1010], # Hips -> Knee
+        'cuisse': { 
+            'indices': [1010, 1011], 
+            'axis_indices': [3170, 1010],
             'description': 'Tour de cuisse'
         },
-        'bras': { # Tour de bras (Bicep Gauche)
-            'indices': [1723], 
-            'axis_indices': [636, 1723], # Shoulder -> Elbow
+        'bras': { 
+            'indices': [1723, 1724], 
+            'axis_indices': [636, 1723],
             'description': 'Tour de bras (biceps)'
         },
-        'poignet': { # Tour de poignet (Gauche)
-            'indices': [2096],
-            'axis_indices': [1723, 2096], # Elbow -> Wrist
+        'poignet': { 
+            'indices': [2096, 2097],
+            'axis_indices': [1723, 2096],
             'description': 'Tour de poignet'
         },
-        'cou': { # Tour de cou
-            'indices': [3026],
+        'cou': { 
+            'indices': [3026, 3027],
             'description': 'Tour de cou'
         },
-        'mollet': { # Tour de mollet (Gauche)
-            'indices': [3292],
-            'axis_indices': [1010, 3292], # Knee -> Ankle
+        'mollet': { 
+            'indices': [3292, 3293],
+            'axis_indices': [1010, 3292],
             'description': 'Tour de mollet'
         },
-        'cheville': { # Tour de cheville (G)
-            'indices': [3307],
+        'cheville': { 
+            'indices': [3307, 3308],
             'axis_indices': [3292, 3307],
             'description': 'Tour de cheville'
         },
-        'avant_bras': { # Avant-bras (G)
-            'indices': [2145],
-            'axis_indices': [1723, 2096], # Elbow -> Wrist
+        'avant_bras': { 
+            'indices': [2145, 2146],
+            'axis_indices': [1723, 2096],
             'description': 'Tour d\'avant-bras'
         },
-        'entrejambe': { # Longueur jambe (Crotch to Floor)
+        'entrejambe': { 
             'type': 'distance',
-            'indices': [3500, 3387], # Crotch -> Heel
+            'indices': [3500, 3387], 
             'description': 'Longueur entrejambe'
         },
-        'longueur_manche': { # Epaule -> Poignet
+        'longueur_manche': { 
             'type': 'distance',
             'indices': [636, 2096], 
             'description': 'Longueur de manche'
         },
-        'largeur_epaules': { # Epaule à Epaule
+        'largeur_epaules': { 
             'type': 'distance',
-            'indices': [636, 4110], # Left -> Right Acromion
+            'indices': [636, 4110], 
             'description': 'Largeur d\'épaules'
         },
-        'genou': { # Tour de genou (G)
-            'indices': [1100], # Distinct from Thigh 1010
+        'genou': { 
+            'indices': [1100, 1101],
             'description': 'Tour de genou'
         },
-        'tete': { # Tour de tête
-            'indices': [411],
+        'tete': { 
+            'indices': [411, 412],
             'description': 'Tour de tête'
         },
-        'sous_poitrine': { # Tour sous-poitrine
-            'indices': [3021],
+        'sous_poitrine': { 
+            'indices': [3021, 3022],
             'description': 'Tour sous-poitrine'
         },
-        'longueur_jambe': { # Hanche à Sol
+        'longueur_jambe': { 
             'type': 'distance',
             'indices': [3170, 3387],
             'description': 'Longueur de jambe totale'
         },
-        'largeur_pectoral': { # Largeur de poitrine
+        'largeur_pectoral': { 
             'type': 'distance',
-            'indices': [3015, 6500], # approx left/right pectoral
+            'indices': [3015, 6500],
             'description': 'Largeur pectorale'
         },
-        'largeur_dos': { # Largeur du dos
+        'largeur_dos': { 
             'type': 'distance',
             'indices': [3021, 6510],
             'description': 'Largeur du dos'
         },
-        'hauteur_torse': { # Epaule à Taille
+        'hauteur_torse': { 
             'type': 'distance',
             'indices': [636, 3502],
             'description': 'Hauteur du torse'
@@ -109,53 +109,48 @@ class MeshMeasurements:
 
     # Correspondance des noms de mesures demandées (Synonymes & French labels)
     MEASUREMENT_MAPPING = {
-            # Circonférences
-            'poitrine': 'poitrine',
-            'tour_poitrine': 'poitrine',
-            'tour_de_poitrine': 'poitrine',
-            'taille': 'taille',
-            'tour_taille': 'taille',
-            'tour_de_taille': 'taille',
-            'ceinture': 'taille',
-            'bassin': 'bassin',
-            'hanche': 'bassin',
-            'tour_de_bassin': 'bassin',
-            'cuisse': 'cuisse',
-            'bras': 'bras',
-            'tour_manche': 'bras',
-            'tour_de_manche': 'bras',
-            'poignet': 'poignet',
-            'cou': 'cou',
-            'mollet': 'mollet',
-            'cheville': 'cheville',
-            'bas': 'cheville', # Souvent le bas du pantalon match la cheville
-            'avant_bras': 'avant_bras',
-            'genou': 'genou',
-            'tete': 'tete',
-            'sous_poitrine': 'sous_poitrine',
-            
-            # Longueurs / Distances
-            'entrejambe': 'entrejambe',
-            'long_pantalon': 'entrejambe',
-            'longueur_manche': 'longueur_manche',
-            'long_manche': 'longueur_manche',
-            'largeur_epaules': 'largeur_epaules',
-            'epaule': 'largeur_epaules',
-            'longueur_jambe': 'longueur_jambe',
-            'long_jupe': 'longueur_jambe',
-            'long_robe': 'longueur_jambe', # Approximation
-            'long_chemise': 'hauteur_torse', # Approximation
-            'long_camisole': 'hauteur_torse', # Approximation
-            'hauteur_torse': 'hauteur_torse',
-            'long_taille': 'hauteur_torse',
-            'largeur_pectoral': 'largeur_pectoral',
-            'largeur_dos': 'largeur_dos',
-            'dos': 'largeur_dos',
-            
-            # Autres synonymes potentiels
-            'tour_emanchure': 'bras', # Proxy
-            'pinces': 'taille' # Proxy (Dart location is near waist)
-        }
+        'poitrine': 'poitrine',
+        'tour_poitrine': 'poitrine',
+        'tour_de_poitrine': 'poitrine',
+        'taille': 'taille',
+        'tour_taille': 'taille',
+        'tour_de_taille': 'taille',
+        'ceinture': 'taille',
+        'bassin': 'bassin',
+        'hanche': 'bassin',
+        'tour_de_bassin': 'bassin',
+        'cuisse': 'cuisse',
+        'bras': 'bras',
+        'tour_manche': 'bras',
+        'tour_de_manche': 'bras',
+        'poignet': 'poignet',
+        'cou': 'cou',
+        'mollet': 'mollet',
+        'cheville': 'cheville',
+        'bas': 'cheville',
+        'avant_bras': 'avant_bras',
+        'genou': 'genou',
+        'tete': 'tete',
+        'sous_poitrine': 'sous_poitrine',
+        'entrejambe': 'entrejambe',
+        'long_pantalon': 'entrejambe',
+        'longueur_manche': 'longueur_manche',
+        'long_manche': 'longueur_manche',
+        'largeur_epaules': 'largeur_epaules',
+        'epaule': 'largeur_epaules',
+        'longueur_jambe': 'longueur_jambe',
+        'long_jupe': 'longueur_jambe',
+        'long_robe': 'longueur_jambe',
+        'long_chemise': 'hauteur_torse',
+        'long_camisole': 'hauteur_torse',
+        'hauteur_torse': 'hauteur_torse',
+        'long_taille': 'hauteur_torse',
+        'largeur_pectoral': 'largeur_pectoral',
+        'largeur_dos': 'largeur_dos',
+        'dos': 'largeur_dos',
+        'tour_emanchure': 'bras',
+        'pinces': 'taille'
+    }
 
     def __init__(self, smpl_vertices: np.ndarray, smpl_faces: np.ndarray = None):
         """
@@ -168,7 +163,6 @@ class MeshMeasurements:
         self.vertices = smpl_vertices
         self.faces = smpl_faces
         self.measurements_cache = {}
-        self.visual_paths = {} # Stocke les points 3D pour l'affichage JSON
         
         # Init Trimesh object if faces provided
         self.mesh = None
@@ -405,28 +399,25 @@ class MeshMeasurements:
             # Mesure de circonférence
             # NOTE: On utilise calculate_circumference car il gère le fallback si le slicing échoue
             axis_indices = part_info.get('axis_indices')
-            measurement_value, points = self.calculate_circumference(part_info['indices'], limb_axis=axis_indices)
-            self.visual_paths[key] = points
+            measurement_value, _ = self.calculate_circumference(part_info['indices'], limb_axis=axis_indices)
         
         elif part_type == 'distance' and 'indices' in part_info:
             # Mesure de distance entre 2 points (ex: longueur jambe)
             if len(part_info['indices']) >= 2:
-                measurement_value, points = self.calculate_distance(
+                measurement_value, _ = self.calculate_distance(
                     part_info['indices'][0],
                     part_info['indices'][1]
                 )
-                self.visual_paths[key] = points
         
         elif 'start' in part_info and 'end' in part_info:
             # Rétrocompatibilité distance
-            measurement_value, points = self.calculate_distance(part_info['start'], part_info['end'])
-            self.visual_paths[key] = points
+            measurement_value, _ = self.calculate_distance(part_info['start'], part_info['end'])
 
         # Cacher le résultat
         self.measurements_cache[key] = measurement_value
         return measurement_value
 
-    def get_all_measurements(self, measures_table: List[str] = None, include_paths: bool = False) -> Dict:
+    def get_all_measurements(self, measures_table: List[str] = None) -> Dict:
         """
         Récupère toutes les mesures spécifiées.
         """
@@ -439,11 +430,6 @@ class MeshMeasurements:
             val = self.get_measurement(m_name)
             results[m_name] = val
 
-        if include_paths:
-            return {
-                'values': results,
-                'paths': self.visual_paths
-            }
         return results
 
     def scale_measurements(self, scale_factor: float, measurements: Dict[str, float]) -> Dict[str, float]:

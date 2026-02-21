@@ -52,29 +52,33 @@ use_fallback = False
 
 def sanitize_measurements(measurements, gender='male', height=1.75):
     """
-    Corrige les valeurs physiquement impossibles (ex: Poignet=1.89m) par des heuristiques ou moyennes.
-    Toutes les valeurs sont considérées en millimètres (mm).
+    Corrige les valeurs physiquement impossibles par des heuristiques ou moyennes.
+    Normalise les clés avec des underscores pour la logique interne.
+    Toutes les valeurs sont en mm.
     """
-    # Moyennes anthropométriques en mm (approx pour 1.75m male / 1.65m female)
+    # Moyennes anthropométriques complètes (pour 1.75m male / 1.65m female)
     averages = {
         'male': {
             'height': 1.75,
-            'poignet': 175, 'bras': 350, 'epaule': 150,
-            'bas': 240, 'genou': 380, 'cuisse': 580,
-            'poitrine': 1000, 'taille': 850, 'hanche': 950
+            'poignet': 175, 'bras': 350, 'epaule': 150, 'largeur_epaules': 420,
+            'bas': 240, 'genou': 380, 'cuisse': 580, 'mollet': 360, 'cheville': 220,
+            'poitrine': 1000, 'taille': 850, 'hanche': 950, 'bassin': 950,
+            'entrejambe': 820, 'longueur_manche': 600, 'hauteur_torse': 700,
+            'cou': 370, 'tete': 560, 'sous_poitrine': 850
         },
         'female': {
             'height': 1.65,
-            'poignet': 160, 'bras': 290, 'epaule': 130,
-            'bas': 220, 'genou': 350, 'cuisse': 550,
-            'poitrine': 900, 'taille': 700, 'hanche': 950
+            'poignet': 160, 'bras': 290, 'epaule': 130, 'largeur_epaules': 380,
+            'bas': 220, 'genou': 350, 'cuisse': 550, 'mollet': 340, 'cheville': 210,
+            'poitrine': 900, 'taille': 700, 'hanche': 950, 'bassin': 950,
+            'entrejambe': 780, 'longueur_manche': 550, 'hauteur_torse': 650,
+            'cou': 340, 'tete': 540, 'sous_poitrine': 750
         }
     }
-    # Safety: ensure gender is valid
+    
     if gender not in averages: gender = 'male'
     ref = averages[gender]
     
-    # Adapter les moyennes par rapport à la taille (Proportionnel)
     try:
         h_val = float(height) if height else ref['height']
     except:
@@ -83,76 +87,102 @@ def sanitize_measurements(measurements, gender='male', height=1.75):
     scale = h_val / ref['height']
     avg = {k: v * scale for k, v in ref.items() if k != 'height'}
     
-    # Normaliser keys en minuscules pour la sanitization logic interne
-    m = {k.lower(): v for k, v in measurements.items()}
+    # Normalisation : clés lowercase et underscores pour la comparaison
+    m = {k.lower().strip().replace(' ', '_'): v for k, v in measurements.items()}
     
-    # Prétraitement : Unifier les clés pour la logique de sanitization
     def get_val(keys):
         for k in keys:
             if k in m: return m[k]
         return 0.0
 
-    poitrine_val = get_val(['poitrine', 'tour_poitrine', 'tour de poitrine'])
-    taille_val = get_val(['taille', 'tour_taille', 'tour de taille'])
-    hanche_val = get_val(['hanche', 'bassin'])
-    bras_val = get_val(['bras', 'tour_manche', 'tour de manche'])
+    # 1. Torse
+    poitrine_val = get_val(['poitrine', 'tour_poitrine', 'tour_de_poitrine'])
+    if poitrine_val > 1500 or poitrine_val < 500:
+        val = avg['poitrine']
+        for k in ['poitrine', 'tour_poitrine', 'tour_de_poitrine']:
+            if k in m: m[k] = val
 
-    # 7. Mollet / Cheville
-    if m.get('mollet', 0) > 600 or m.get('mollet', 0) < 200:
-        m['mollet'] = 360 * scale
-    if m.get('cheville', 0) > 400 or m.get('cheville', 0) < 150:
-        m['cheville'] = 220 * scale
+    taille_val = get_val(['taille', 'tour_taille', 'tour_de_taille', 'ceinture', 'pinces'])
+    if taille_val > 1400 or taille_val < 450:
+        val = avg['taille']
+        for k in ['taille', 'tour_taille', 'tour_de_taille', 'ceinture', 'pinces']:
+            if k in m: m[k] = val
 
-    # 8. Cou / Tête
-    if m.get('cou', 0) > 600 or m.get('cou', 0) < 250:
-        m['cou'] = 370 * scale # Distinct from knee
-    if m.get('tete', 0) > 800 or m.get('tete', 0) < 400:
-        m['tete'] = 560 * scale
+    hanche_val = get_val(['hanche', 'bassin', 'tour_de_bassin'])
+    if hanche_val > 1600 or hanche_val < 500:
+        val = avg['hanche']
+        for k in ['hanche', 'bassin', 'tour_de_bassin']:
+            if k in m: m[k] = val
 
-    # 9. Genou
-    if m.get('genou', 0) > 600 or m.get('genou', 0) < 250:
-        m['genou'] = 390 * scale
+    if m.get('sous_poitrine', 0) > 1300 or m.get('sous_poitrine', 0) < 400: m['sous_poitrine'] = avg['sous_poitrine']
 
-    # 10. Avant-bras
-    if m.get('avant_bras', 0) > 450 or m.get('avant_bras', 0) < 150:
-        m['avant_bras'] = 260 * scale
+    # 2. Bras et Poignet
+    bras_val = get_val(['bras', 'tour_manche', 'tour_de_manche', 'tour_emanchure'])
+    if bras_val > 600 or bras_val < 150:
+        val = avg['bras']
+        for k in ['bras', 'tour_manche', 'tour_de_manche', 'tour_emanchure']:
+            if k in m: m[k] = val
 
-    # 10. Longueurs (Simple clamp for sanity)
-    if m.get('entrejambe', 0) > 1200: m['entrejambe'] = 820 * scale
-    if m.get('longueur_manche', 0) > 1000: m['longueur_manche'] = 600 * scale
+    if m.get('poignet', 0) > 300 or m.get('poignet', 0) < 100: m['poignet'] = avg['poignet']
+    if m.get('avant_bras', 0) > 450 or m.get('avant_bras', 0) < 150: m['avant_bras'] = 260 * scale
 
-    # 1. Poignet
-    if m.get('poignet', 0) > 300 or m.get('poignet', 0) < 100: 
-        m['poignet'] = avg['poignet']
-
-    # 2. Bras (Biceps)
-    if bras_val > 600 or bras_val < 150: 
-        new_bras = avg['bras']
-        for k in ['bras', 'tour_manche', 'tour de manche']:
-            if k in m: m[k] = new_bras
-
-    # 3. Torse (Check limits approx)
-    if poitrine_val > 1400 or poitrine_val < 600:
-        new_poi = avg['poitrine']
-        for k in ['poitrine', 'tour_poitrine', 'tour de poitrine']:
-            if k in m: m[k] = new_poi
-    
-    if taille_val > 1400 or taille_val < 500:
-        new_tai = avg['taille']
-        for k in ['taille', 'tour_taille', 'tour de taille']:
-            if k in m: m[k] = new_tai
-    
-    if hanche_val > 1600 or hanche_val < 600:
-        new_han = avg['hanche']
-        for k in ['hanche', 'bassin']:
-            if k in m: m[k] = new_han
-    
-    # 4. Cuisse
+    # 3. Jambes
     if m.get('cuisse', 0) > 1000 or m.get('cuisse', 0) < 300: m['cuisse'] = avg['cuisse']
+    if m.get('genou', 0) > 600 or m.get('genou', 0) < 200: m['genou'] = avg['genou']
+    if m.get('mollet', 0) > 600 or m.get('mollet', 0) < 200: m['mollet'] = avg['mollet']
+    
+    cheville_val = get_val(['cheville', 'bas'])
+    if cheville_val > 400 or cheville_val < 150:
+        val = avg['cheville']
+        if 'cheville' in m: m['cheville'] = val
+        if 'bas' in m: m['bas'] = val
 
-    # Réinjecter dans le dictionnaire d'origine en respectant les clés d'entrée
+    # 4. Longueurs et Épaules
+    long_manche_val = get_val(['longueur_manche', 'long_manche'])
+    if long_manche_val > 1000 or long_manche_val < 300:
+        val = avg['longueur_manche']
+        if 'longueur_manche' in m: m['longueur_manche'] = val
+        if 'long_manche' in m: m['long_manche'] = val
+
+    entrejambe_val = get_val(['entrejambe', 'long_pantalon'])
+    if entrejambe_val > 1300 or entrejambe_val < 500:
+        val = avg['entrejambe']
+        if 'entrejambe' in m: m['entrejambe'] = val
+        if 'long_pantalon' in m: m['long_pantalon'] = val
+
+    # Jambe totale / Jupe / Robe
+    jambe_val = get_val(['longueur_jambe', 'long_jupe', 'long_robe'])
+    if jambe_val > 1500 or jambe_val < 400:
+        val = 1000 * scale # Default ~1m
+        for k in ['longueur_jambe', 'long_jupe', 'long_robe']:
+            if k in m: m[k] = val
+
+    # Épaules / Dos
+    epaules_val = get_val(['largeur_epaules', 'epaule'])
+    if epaules_val > 700 or epaules_val < 250:
+        val = avg['largeur_epaules']
+        if 'largeur_epaules' in m: m['largeur_epaules'] = val
+        if 'epaule' in m: m['epaule'] = val
+
+    dos_val = get_val(['largeur_dos', 'dos'])
+    if dos_val > 700 or dos_val < 200:
+        val = 400 * scale
+        if 'largeur_dos' in m: m['largeur_dos'] = val
+        if 'dos' in m: m['dos'] = val
+        
+    torse_h_val = get_val(['hauteur_torse', 'long_taille', 'long_chemise', 'long_camisole'])
+    if torse_h_val > 1000 or torse_h_val < 300:
+        val = avg['hauteur_torse']
+        for k in ['hauteur_torse', 'long_taille', 'long_chemise', 'long_camisole']:
+            if k in m: m[k] = val
+
+    # 5. Haut
+    if m.get('cou', 0) > 600 or m.get('cou', 0) < 200: m['cou'] = avg['cou']
+    if m.get('tete', 0) > 800 or m.get('tete', 0) < 300: m['tete'] = avg['tete']
+
+    # Réinjecter dans le dictionnaire d'origine (en respectant les clés d'entrée originales)
     for k in measurements.keys():
-        kl = k.lower()
+        kl = k.lower().strip().replace(' ', '_')
         if kl in m:
             measurements[k] = m[kl]
             
@@ -243,7 +273,6 @@ def estimate_measurements():
             gender = form_data.get('gender', 'neutral')
             height = form_data.get('height')
             include_mesh = form_data.get('include_mesh') == 'true'
-            include_visual_paths = form_data.get('include_visual_paths') == 'true'
             
         else:
             # Mode JSON standard
@@ -262,7 +291,6 @@ def estimate_measurements():
             gender = data.get('gender', 'neutral')
             height = data.get('height')
             include_mesh = data.get('include_mesh', False)
-            include_visual_paths = data.get('include_visual_paths', False)
             uploaded_files = []
 
         if not photos_list and not uploaded_files:
@@ -444,19 +472,12 @@ def estimate_measurements():
 
         # Étape 4: Extraire les mensurations
         mesh_measurements = MeshMeasurements(vertices, faces)
-        res_measurements = mesh_measurements.get_all_measurements(measures_table, include_paths=include_visual_paths)
+        measurements = mesh_measurements.get_all_measurements(measures_table)
         
-        if include_visual_paths:
-            measurements = res_measurements['values']
-            visual_paths = res_measurements['paths']
-        else:
-            measurements = res_measurements
-            visual_paths = {}
-
         # Valider les mensurations
-        is_valid, errors = validate_measurements(measurements)
+        is_valid, validation_errors = validate_measurements(measurements)
         if not is_valid:
-            logger.warning(f"Mensurations invalides: {errors}")
+            logger.warning(f"Mensurations invalides: {validation_errors}")
 
         # Exporter le mesh si demandé
         mesh_url = None
@@ -501,7 +522,6 @@ def estimate_measurements():
         response = {
             'prediction_id': prediction_id,
             'measurements': measurements_clean,
-            'visual_paths': visual_paths if include_visual_paths else None,
             'mesh_url': mesh_url,
             'metadata': {
                 'num_views': len(image_data_list),
