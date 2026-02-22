@@ -3,6 +3,9 @@ import cv2
 import numpy as np
 import pickle
 import pandas as pd
+import torch
+import traceback
+import io
 from pathlib import Path
 import sys
 
@@ -18,6 +21,27 @@ if not hasattr(np, 'typeDict'):
 
 from utils.pose_estimation import PoseEstimator
 from smpl_engine import create_smpl_engine
+
+def robust_torch_load(path):
+    """
+    Les fichiers AGORA sont des pickles standard contenant des tenseurs Torch.
+    Si on utilise pickle.load, il échoue sur les tenseurs CUDA.
+    Si on utilise torch.load, il échoue sur le "magic number" car ce n'est pas un format Torch natif.
+    Cette classe intercepte les chargements de stockage Torch pour les forcer sur CPU.
+    """
+    class CPU_Unpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if module == 'torch.storage' and name == '_load_from_bytes':
+                return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+            return super().find_class(module, name)
+
+    with open(path, 'rb') as f:
+        return CPU_Unpickler(f).load()
+
+def to_numpy(tensor):
+    if torch.is_tensor(tensor):
+        return tensor.detach().cpu().numpy()
+    return np.array(tensor)
 
 def evaluate_agora(max_images: int = 10):
     print(f"🎯 Démarrage de l'évaluation sur le dataset AGORA (max {max_images} images)...")
@@ -62,9 +86,18 @@ def evaluate_agora(max_images: int = 10):
             img_path = img_dir / img_name
             
             if not img_path.exists():
-                # Try common variations if extension differs
-                img_path = img_dir / img_name.replace('.png', '.jpg')
-                if not img_path.exists():
+                # Try common variations
+                alt_path_1 = img_dir / img_name.replace('.png', '.jpg')
+                alt_path_2 = img_dir / img_name.replace('.png', '_1280x720.png')
+                alt_path_3 = img_dir / img_name.replace('.jpg', '_1280x720.jpg')
+                
+                if alt_path_1.exists():
+                    img_path = alt_path_1
+                elif alt_path_2.exists():
+                    img_path = alt_path_2
+                elif alt_path_3.exists():
+                    img_path = alt_path_3
+                else:
                     continue
 
             print(f"[{processed_images+1}] ⏳ Image: {img_name}")
@@ -95,34 +128,38 @@ def evaluate_agora(max_images: int = 10):
                 if person_found: break
                 
                 # Conversion OBJ path to PKL path (params)
-                # ex: smpl_gt/folder/person.obj -> dataset/agora/smpl_gt/folder/person.pkl
+                # ex: smpl_gt/folder/person.obj -> folder/person.pkl
                 pkl_rel_path = gt_obj_path.replace('.obj', '.pkl')
+                
+                # Le dataframe contient déjà "smpl_gt/" dans le nom (ex: 'smpl_gt/trainset_renderpeople.../file.obj')
+                # base_dir est 'dataset/agora'
                 pkl_abs_path = base_dir / pkl_rel_path
                 
-                if not pkl_abs_path.exists():
-                    # Check if smpl_gt is at root or elsewhere
-                    # Sometimes the path already includes 'dataset/agora'
-                    if 'dataset/agora' in pkl_rel_path:
-                        pkl_abs_path = Path(pkl_rel_path)
-                    else:
-                        pkl_abs_path = base_dir.parent / pkl_rel_path
+                # Si le dataframe ne contient pas smpl_gt, on l'ajoute
+                if not str(pkl_rel_path).startswith('smpl_gt'):
+                    pkl_abs_path = gt_root / pkl_rel_path
                 
                 if not pkl_abs_path.exists():
-                    # Final attempt: search by filename if structure changed
-                    filename = Path(pkl_rel_path).name
-                    # We skip the heavy search for now to keep it fast
-                    continue
+                     print(f"   ⚠️ GT introuvable pour {i}: cherché dans {pkl_abs_path}")
+                     continue
 
                 # Load Ground Truth Betas
                 try:
-                    with open(pkl_abs_path, 'rb') as f:
-                        gt_data = pickle.load(f, encoding='latin1')
+                    # Utilisation du loader robuste pour contrer les erreurs CUDA imbriquées
+                    gt_data = robust_torch_load(pkl_abs_path)
                     
-                    gt_betas = np.array(gt_data.get('betas', gt_data.get('shape', []))).flatten()[:10]
-                    if len(gt_betas) == 0: continue
+                    # Extraction des betas (peuvent être des tenseurs avec grad)
+                    raw_betas = gt_data.get('betas', gt_data.get('shape', []))
+                    gt_betas = to_numpy(raw_betas).flatten()[:10]
+                    
+                    if len(gt_betas) == 0:
+                        print(f"   ⚠️ Betas vides pour person {i} dans {pkl_abs_path.name}. Keys: {list(gt_data.keys())}")
+                        continue
                     
                     gender = genders[i] if i < len(genders) else 'neutral'
                 except Exception as e:
+                    print(f"   ❌ Erreur lecture GT person {i} ({pkl_abs_path.name}): {e}")
+                    # traceback.print_exc()
                     continue
                 
                 # Step 1: Detect pose (MediaPipe)
