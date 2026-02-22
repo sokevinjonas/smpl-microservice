@@ -12,6 +12,7 @@ services:
       # Code source - monté en temps réel (pas besoin de rebuild!)
       - ./app.py:/app/app.py
       - ./smpl_engine.py:/app/smpl_engine.py
+      - ./evaluate_agora.py:/app/evaluate_agora.py
       - ./utils:/app/utils
       # Modèles (lecture seule)
       - ./models:/app/models:ro
