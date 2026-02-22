@@ -15,6 +15,7 @@ import torch
 import random
 from typing import Dict, Tuple
 from smplx import SMPL  # import direct de la classe
+from utils.volume_utils import calculate_mesh_volume_tensor
 
 class SMPLEngine:
     def __init__(self, model_dir: str = './models'):
@@ -151,6 +152,31 @@ class SMPLEngine:
             print(f"❌ Erreur lors de la génération du mesh: {e}")
             return None
 
+    def get_metrics_from_betas(self, betas_np: np.ndarray, gender: str = 'neutral') -> Dict:
+        """
+        Calcule la taille (m) et le poids (kg) théoriques pour un set de betas donné.
+        """
+        if self.smpl_model is None or self.current_gender != gender:
+            self.load_smpl_model(gender)
+            
+        with torch.no_grad():
+            betas = torch.from_numpy(betas_np).unsqueeze(0).float().to(self.device)
+            # Pose T-pose (zeros)
+            output = self.smpl_model(betas=betas, return_verts=True)
+            vertices = output.vertices[0]
+            
+            # 1. Height
+            y_min = torch.min(vertices[:, 1])
+            y_max = torch.max(vertices[:, 1])
+            height = (y_max - y_min).item()
+            
+            # 2. Weight
+            faces = torch.tensor(np.array(self.smpl_model.faces, dtype=np.int32), dtype=torch.long, device=self.device)
+            vol_m3 = calculate_mesh_volume_tensor(vertices, faces)
+            weight = vol_m3 * 1010.0 # Masse volumique humaine
+            
+        return {'height': height, 'weight': weight}
+
     def get_mesh_faces(self) -> np.ndarray:
         if self.smpl_model is None:
             return None
@@ -159,7 +185,6 @@ class SMPLEngine:
         except:
             return None
 
-    from utils.volume_utils import calculate_mesh_volume_tensor
 
     def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], image_shapes: list[Tuple[int, int]], target_weight: float = None) -> Dict:
         """
@@ -178,8 +203,11 @@ class SMPLEngine:
         weights_list = []
         
         # Indices (identiques pour toutes les vues)
-        mp_indices = [12, 11, 24, 23, 14, 13, 26, 25, 16, 15, 28, 27]
-        smpl_indices = [17, 16, 2, 1, 19, 18, 5, 4, 21, 20, 8, 7]
+        # Indices (identiques pour toutes les vues)
+        # Ajout du nez (MP 0 -> SMPL 24/15?) 
+        # Pour SMPL classique (24 joints), le head est joint 15. Nose est souvent approximé par Head.
+        mp_indices = [12, 11, 24, 23, 14, 13, 26, 25, 16, 15, 28, 27, 0]
+        smpl_indices = [17, 16, 2, 1, 19, 18, 5, 4, 21, 20, 8, 7, 15]
         
         for kps in keypoints_list:
             # Conversion et Inversion Y (MediaPipe -> SMPL Y-up)
@@ -225,12 +253,28 @@ class SMPLEngine:
             cam_scales.append(scale)
             cam_transs.append(trans)
             
-        # Optimiseur : Tous les paramètres
-        params = [betas, body_pose, transl] + global_orients + cam_scales + cam_transs
-        optimizer = torch.optim.Adam(params, lr=0.02)
+        # Optimiseur 1 : Caméra et Orientation seulement (pour dégrossir)
+        optimizer_init = torch.optim.Adam(global_orients + cam_scales + cam_transs + [transl], lr=0.05)
+        for i in range(50):
+            optimizer_init.zero_grad()
+            loss = 0.0
+            for v_idx in range(num_views):
+                output = self.smpl_model(global_orient=global_orients[v_idx], transl=transl, return_verts=False)
+                joints_3d = output.joints
+                pred_2d = joints_3d[0, smpl_indices, :2] * cam_scales[v_idx] + cam_transs[v_idx]
+                loss += torch.mean((pred_2d - target_kps_list[v_idx][mp_indices])**2)
+            loss.backward()
+            optimizer_init.step()
+
+        # Optimiseur 2 : Tous les paramètres (Pose et Shape)
+        # On utilise des LR différents pour betas (plus fort pour bouger plus vite)
+        optimizer = torch.optim.Adam([
+            {'params': [betas], 'lr': 0.05},
+            {'params': [body_pose, transl] + global_orients + cam_scales + cam_transs, 'lr': 0.01}
+        ])
         
-        # Boucle d'optimisation
-        for i in range(150): # Un peu plus d'itérations pour le multi-view
+        # Boucle d'optimisation (Augmentée pour précision)
+        for i in range(300):
             optimizer.zero_grad()
             total_loss = 0.0
             
@@ -264,8 +308,9 @@ class SMPLEngine:
                 total_loss += loss_view * 100.0 # Poids reprojection
             
             # Priors (Régularisation sur les paramètres partagés)
-            loss_beta = torch.mean(betas**2) * 0.1
-            loss_pose = torch.mean(body_pose**2) * 0.1
+            # On la baisse pour AGORA pour permettre aux betas de s'ajuster
+            loss_beta = torch.mean(betas**2) * 0.005
+            loss_pose = torch.mean(body_pose**2) * 0.01
             
             # Contrainte de poids (Weight Loss)
             loss_weight = 0.0

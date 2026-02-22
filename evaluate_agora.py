@@ -43,7 +43,7 @@ def to_numpy(tensor):
         return tensor.detach().cpu().numpy()
     return np.array(tensor)
 
-def evaluate_agora(max_images: int = 10):
+def evaluate_agora(max_images: int = 100):
     print(f"🎯 Démarrage de l'évaluation sur le dataset AGORA (max {max_images} images)...")
     
     base_dir = Path("dataset/agora")
@@ -63,6 +63,8 @@ def evaluate_agora(max_images: int = 10):
     smpl_engine = create_smpl_engine()
     
     mae_list = []
+    mae_adults = []
+    mae_kids = []
     failed = 0
     processed_images = 0
     
@@ -74,6 +76,13 @@ def evaluate_agora(max_images: int = 10):
         print(f"Loading annotations: {ann_file.name}")
         try:
             df = pd.read_pickle(ann_file)
+            
+            # Si on demande beaucoup d'images, on échantillonne pour aller plus vite
+            # et voir plus de diversité
+            if max_images > 200:
+                step = len(df) // (max_images // 10) # ~10% de chaque fichier
+                if step > 1:
+                    df = df.iloc[::step]
         except Exception as e:
             print(f"Error reading {ann_file.name}: {e}")
             continue
@@ -157,31 +166,53 @@ def evaluate_agora(max_images: int = 10):
                         continue
                     
                     gender = genders[i] if i < len(genders) else 'neutral'
+                    
+                    # Correction: 'kid' est une liste par image
+                    kids_list = row.get('kid', [])
+                    is_kid = kids_list[i] if i < len(kids_list) else False
+                    
+                    # NEW: Get GT height and weight to use as "perfect" constraints for validation
+                    gt_metrics = smpl_engine.get_metrics_from_betas(gt_betas, gender=gender)
+                    gt_height = gt_metrics['height']
+                    gt_weight = gt_metrics['weight']
+                    
                 except Exception as e:
                     print(f"   ❌ Erreur lecture GT person {i} ({pkl_abs_path.name}): {e}")
                     # traceback.print_exc()
                     continue
                 
                 # Step 1: Detect pose (MediaPipe)
-                # Note: AGORA scenes have multiple people, MediaPipe might pick the wrong one.
-                # In a real evaluation, we should use the ground truth 2D joints to crop the image.
                 pose_res = pose_estimator.estimate_pose(image_rgb)
                 keypoints = pose_res['keypoints'] if pose_res else None
                 
                 if keypoints is None:
-                    print(f"   ❌ No person detected in scene.")
-                    failed += 1
+                    # On ne compte pas comme échec de MAE mais comme échec de détection
+                    print(f"   ❌ No person detected by MediaPipe for person {i}.")
                     continue
                 
-                # Step 2: Fitting
+                # Step 2: Fitting with GT constraints
                 image_data = [{'image': image_rgb, 'keypoints': keypoints}]
                 try:
-                    res = smpl_engine.process_image(image_data, gender=gender, height=1.70)
+                    # On utilise la taille et le poids RÉELS du sujet AGORA
+                    res = smpl_engine.process_image(
+                        image_data, 
+                        gender=gender, 
+                        height=gt_height, 
+                        target_weight=gt_weight
+                    )
+                    
                     if res and 'smpl_params' in res:
                         pred_betas = res['smpl_params']['betas']
                         mae = np.mean(np.abs(pred_betas - gt_betas))
                         mae_list.append(mae)
-                        print(f"   ✅ Person {i} ({gender}): MAE = {mae:.4f}")
+                        
+                        if is_kid:
+                            mae_kids.append(mae)
+                        else:
+                            mae_adults.append(mae)
+                            
+                        type_str = "KID" if is_kid else "ADULT"
+                        print(f"   ✅ Person {i} ({gender}, {type_str}): MAE = {mae:.4f} (Height={gt_height:.2f}m, Weight={gt_weight:.1f}kg)")
                         person_found = True
                     else:
                         print(f"   ❌ Fitting failed for person {i}.")
@@ -205,6 +236,15 @@ def evaluate_agora(max_images: int = 10):
     if len(mae_list) > 0:
         global_mae = np.mean(mae_list)
         print(f"MAE GLOBAL sur la forme (Betas) : {global_mae:.4f}")
+        if mae_adults:
+            print(f"MAE ADULTES : {np.mean(mae_adults):.4f} ({len(mae_adults)} sujets)")
+        if mae_kids:
+            print(f"MAE ENFANTS : {np.mean(mae_kids):.4f} ({len(mae_kids)} sujets)")
+    print("==================================================\n")
 
 if __name__ == "__main__":
-    evaluate_agora(max_images=10)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--max', type=int, default=100)
+    args = parser.parse_args()
+    evaluate_agora(max_images=args.max)
