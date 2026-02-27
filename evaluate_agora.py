@@ -190,15 +190,23 @@ def evaluate_agora(max_images: int = 100):
                     print(f"   ❌ No person detected by MediaPipe for person {i}.")
                     continue
                 
-                # Step 2: Fitting with GT constraints
+                # Step 2: Perspective Calibration
+                # AGORA a souvent '50mm' dans le nom de fichier. 
+                # Focale 50mm sur capteur 36mm -> focal_px = (50/36) * width
+                focal_px = 1777.8 # Par défaut pour 50mm / 1280px
+                if '28mm' in img_name:
+                    focal_px = (28/36) * 1280 # ~995.5
+                
+                # Step 3: Fitting with GT constraints and Perspective
                 image_data = [{'image': image_rgb, 'keypoints': keypoints}]
                 try:
-                    # On utilise la taille et le poids RÉELS du sujet AGORA
+                    # On utilise la taille et le poids RÉELS du sujet AGORA + Projection Perspective
                     res = smpl_engine.process_image(
                         image_data, 
                         gender=gender, 
                         height=gt_height, 
-                        target_weight=gt_weight
+                        target_weight=gt_weight,
+                        focal_length=focal_px
                     )
                     
                     if res and 'smpl_params' in res:

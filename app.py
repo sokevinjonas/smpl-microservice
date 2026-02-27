@@ -313,17 +313,30 @@ def estimate_measurements():
                 logger.warning(f"Hauteur ignorée (valeur invalide: {height})")
                 height_m = None
 
-        # Normalisation Poids
+        # Normalisation Poids et prise en charge des intervalles (e.g. "70-75")
         weight_kg = None
+        target_weight_interval = None
         if weight is not None:
-            try:
-                weight_kg = float(weight)
-                if weight_kg <= 0 or weight_kg > 300:
-                    logger.warning(f"Poids ignoré (hors limites réalistes: {weight}kg)")
+            if isinstance(weight, str) and '-' in weight:
+                try:
+                    parts = weight.split('-')
+                    if len(parts) == 2:
+                        min_w, max_w = float(parts[0].strip()), float(parts[1].strip())
+                        if 0 < min_w <= 300 and 0 < max_w <= 300 and min_w <= max_w:
+                            target_weight_interval = (min_w, max_w)
+                        else:
+                            logger.warning(f"Intervalle de poids ignoré (hors limites réalistes: {weight})")
+                except ValueError:
+                    logger.warning(f"Intervalle de poids ignoré (valeur invalide: {weight})")
+            else:
+                try:
+                    weight_kg = float(weight)
+                    if weight_kg <= 0 or weight_kg > 300:
+                        logger.warning(f"Poids ignoré (hors limites réalistes: {weight}kg)")
+                        weight_kg = None
+                except ValueError:
+                    logger.warning(f"Poids ignoré (valeur invalide: {weight})")
                     weight_kg = None
-            except ValueError:
-                logger.warning(f"Poids ignoré (valeur invalide: {weight})")
-                weight_kg = None
 
         logger.info(f"Requête reçue (Multipart={is_multipart}): {len(uploaded_files)} fichiers, {len(photos_list)} urls, Genre={gender}, Hauteur={height_m}m, Poids={weight_kg}kg, Measures={len(measures_table)}")
 
@@ -459,7 +472,13 @@ def estimate_measurements():
                 'details': low_conf
             }), 400
 
-        res = smpl_engine.process_image(image_data_list, gender=gender, height=height_m, target_weight=weight_kg)
+        res = smpl_engine.process_image(
+            image_data_list, 
+            gender=gender, 
+            height=height_m, 
+            target_weight=weight_kg,
+            target_weight_interval=target_weight_interval
+        )
         
         if res is None:
             return jsonify({
@@ -540,6 +559,7 @@ def estimate_measurements():
                 'num_views': len(image_data_list),
                 'keypoints_per_view': [len(d['keypoints']) for d in image_data_list],
                 'target_weight_kg': weight_kg,
+                'target_weight_interval': target_weight_interval,
                 'validation_errors': validation_errors,
                 'mesh_vertices': len(vertices),
                 'mode': 'production' if not use_fallback else 'fallback'
