@@ -1,0 +1,67 @@
+name: CI/CD Pipeline to VPS
+
+on:
+  push:
+    branches:
+      - main # Le déploiement se lance quand on push sur main
+
+jobs:
+  validate:
+    name: 🔍 Validate Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Basic Syntax Check
+        run: |
+          python -m py_compile app.py smpl_engine.py utils/pose_estimation.py
+          echo "✅ Syntax check passed."
+
+  deploy:
+    name: 🚀 Deploy to VPS (SSH)
+    runs-on: ubuntu-latest
+    needs: validate # Ne se lance QUE si la phase validate réussit
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Execute Remote Deployment via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          # Utiliser SOIT le mot de passe, SOIT la clé SSH (recommandé)
+          password: ${{ secrets.VPS_PASSWORD }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "--- Déploiement Démarré sur VPS ---"
+
+            TARGET_DIR="$HOME/projects/smpl-microservice"
+
+            # Aller dans le dossier du projet ou le cloner
+            if [ -d "$TARGET_DIR" ]; then
+              cd "$TARGET_DIR"
+              echo "🔄 Répertoire existant, récupération de la dernière version..."
+              # S'assurer d'être sur la bonne branche et forcer le pull
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              echo "⬇️ Clônage initial du dépôt..."
+              mkdir -p "$HOME/projects"
+              cd "$HOME/projects"
+              git clone https://github.com/sokevinjonas/smpl-microservice.git
+              cd smpl-microservice
+            fi
+
+            # Lancer le script de déploiement interne qui gère Docker Compose
+            chmod +x deploy.sh
+            ./deploy.sh
+
+            echo "--- Déploiement VPS Terminé avec succès ---"
