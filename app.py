@@ -299,6 +299,14 @@ def estimate_measurements():
              logger.error("400: Aucune photo (liste vide)")
              return jsonify({'error': 'Aucune photo fournie (JSON: photos[], Form: photos (files))'}), 400
 
+        total_photos = len(photos_list) + len(uploaded_files)
+        if total_photos != 2:
+             logger.error(f"400: Strict Multi-View Validation Echouee (Total: {total_photos})")
+             return jsonify({
+                 'error': 'Deux vues obligatoires (Face et Profil)',
+                 'message': 'Le modèle nécessite exactement 2 photos : une de Face et une de Profil strict pour garantir une bonne précision 3D.'
+             }), 400
+
         if not measures_table:
             logger.error("400: measures_table vide ou mal formatée")
             return jsonify({'error': 'measures_table vide'}), 400
@@ -428,7 +436,8 @@ def estimate_measurements():
                     'image': img,
                     'keypoints': kps,
                     'shape': shape,
-                    'pose_data': pose
+                    'pose_data': pose,
+                    'segmentation_mask': pose.get('segmentation_mask', None)
                 })
                 
             except Exception as e:

@@ -3,3 +3,4 @@
 {"prediction_id": "419d3d10-cb76-4694-b990-b8645434bd87", "timestamp": "2026-02-21T17:58:11.626624", "gender": "female", "height": 170, "measurements_api": {"tour_taille": 939.9, "tour_poitrine": 927.2727272727273}, "mesh_url": null}
 {"prediction_id": "b241b9aa-1214-4f59-867c-8c73a9c34be8", "timestamp": "2026-02-21T17:58:29.933538", "gender": "female", "height": 170, "measurements_api": {"tour_taille": 872.5, "tour_poitrine": 898.7}, "mesh_url": null}
 {"prediction_id": "7298157d-e171-44f2-a89d-e8926e18c80f", "timestamp": "2026-02-21T18:06:18.634465", "gender": "female", "height": 170, "measurements_api": {"tour_taille": 939.9, "tour_poitrine": 927.2727272727273}, "mesh_url": null}
+{"prediction_id": "0c8a1043-750a-4fb7-8c91-7440c219dcb5", "timestamp": "2026-02-27T11:22:55.693204", "gender": "male", "height": 1.75, "measurements_api": {"taille": 934.5, "poitrine": 955.9, "hanche": 924.7}, "mesh_url": null}

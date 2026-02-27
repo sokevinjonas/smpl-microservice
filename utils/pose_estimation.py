@@ -68,7 +68,8 @@ class PoseEstimator:
                 options = vision.PoseLandmarkerOptions(
                     base_options=python.BaseOptions(model_asset_path=model_path),
                     running_mode=vision.RunningMode.IMAGE,
-                    num_poses=1  # Détecter une seule personne
+                    num_poses=1,  # Détecter une seule personne
+                    output_segmentation_masks=True # ENABLING SILHOUETTE MASKS
                 )
                 
                 # Initialiser le PoseLandmarker
@@ -174,10 +175,19 @@ class PoseEstimator:
                     keypoints.append([landmark.x, landmark.y, vis])
                     confidences.append(vis)
                     
+                # Extraction du masque de segmentation si disponible
+                segmentation_mask = None
+                if detection_result.segmentation_masks and len(detection_result.segmentation_masks) > 0:
+                    segmentation_mask = detection_result.segmentation_masks[0].numpy_view()
+                    # Le masque de MP Tasks API est un array de float entre 0 et 1.
+                    # On le convertit en un masque binaire plus strict (silhouette corps)
+                    segmentation_mask = (segmentation_mask > 0.5).astype(np.uint8)
+                    
                 return {
                     'keypoints': np.array(keypoints),
                     'confidences': np.array(confidences),
-                    'num_keypoints': len(keypoints)
+                    'num_keypoints': len(keypoints),
+                    'segmentation_mask': segmentation_mask
                 }
                 
         except Exception as e:

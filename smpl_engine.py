@@ -186,7 +186,7 @@ class SMPLEngine:
             return None
 
 
-    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], image_shapes: list[Tuple[int, int]], target_weight: float = None, target_weight_interval: Tuple[float, float] = None, target_height: float = None, focal_length: float = 1777.8) -> Dict:
+    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], masks_list: list[np.ndarray], image_shapes: list[Tuple[int, int]], target_weight: float = None, target_weight_interval: Tuple[float, float] = None, target_height: float = None, focal_length: float = 1777.8) -> Dict:
         """
         Ajuste le modèle SMPL à plusieurs vues en optimisant pose et shape partagés.
         Suppositions: Vue 0 = Face, Vue 1 = Profil (approx 90 deg)
@@ -203,6 +203,7 @@ class SMPLEngine:
         # 1. Préparation des données pour chaque vue
         target_kps_list = []
         weights_list = []
+        masks_list = [] # SILHOUETTES
         
         # Indices (identiques pour toutes les vues)
         # Indices (identiques pour toutes les vues)
@@ -211,7 +212,8 @@ class SMPLEngine:
         mp_indices = [12, 11, 24, 23, 14, 13, 26, 25, 16, 15, 28, 27, 0]
         smpl_indices = [17, 16, 2, 1, 19, 18, 5, 4, 21, 20, 8, 7, 15]
         
-        for kps in keypoints_list:
+        processed_masks = []
+        for k_idx, kps in enumerate(keypoints_list):
             # Conversion et Inversion Y (MediaPipe -> SMPL Y-up)
             t_kps = torch.tensor(kps[:, :2], dtype=torch.float32, device=self.device)
             t_kps[:, 1] = 1.0 - t_kps[:, 1]
@@ -220,6 +222,20 @@ class SMPLEngine:
             w = torch.tensor(kps[:, 2], dtype=torch.float32, device=self.device).unsqueeze(1)
             w = torch.clamp(w, 0.0, 1.0) # Sécurité (MediaPipe peut donner >1 ?)
             weights_list.append(w)
+            
+            # Precompute true mask bounds if a mask is provided
+            true_bounds = None
+            if masks_list and len(masks_list) > k_idx and masks_list[k_idx] is not None:
+                mask_v = masks_list[k_idx]
+                true_y, true_x = np.where(mask_v > 0)
+                if len(true_x) > 0:
+                    # Find min/max and normalize by image dimensions
+                    h, w = mask_v.shape
+                    min_x, max_x = true_x.min() / w, true_x.max() / w
+                    true_bounds = (min_x, max_x)
+            processed_masks.append(true_bounds)
+            
+        masks_list = processed_masks
 
         # 2. Paramètres PARTAGÉS (Le corps est unique)
         batch_size = 1
@@ -307,7 +323,7 @@ class SMPLEngine:
                     body_pose=body_pose,
                     global_orient=global_orients[v_idx],
                     transl=transl,
-                    return_verts=False
+                    return_verts=True
                 )
                 joints_3d = output.joints
                 
@@ -328,6 +344,22 @@ class SMPLEngine:
                 
                 loss_view = torch.mean(w * (joints_2d_proj - targets)**2)
                 total_loss += loss_view * 100.0 # Poids reprojection
+                
+                # --- SILHOUETTE LOSS (Boundary Pulling) ---
+                if masks_list and len(masks_list) > v_idx and masks_list[v_idx] is not None:
+                    true_min_x, true_max_x = masks_list[v_idx]
+                    
+                    # Project vertices of the body model to 2D
+                    verts_cam = output.vertices[0] + cam_translations[v_idx]
+                    proj_x_v = (verts_cam[:, 0] / verts_cam[:, 2]) * f_norm + 0.5
+                    
+                    pred_min_x = proj_x_v.min()
+                    pred_max_x = proj_x_v.max()
+                    
+                    # Penalize bounding box width mismatch
+                    loss_silh = ((pred_min_x - true_min_x)**2 + (pred_max_x - true_max_x)**2)
+                    total_loss += loss_silh * 60.0 # Strong pull towards actual body width bounds
+                # --- END SILHOUETTE LOSS ---
             
             # Priors (Régularisation sur les paramètres partagés)
             # On la baisse pour AGORA pour permettre aux betas de s'ajuster
@@ -440,6 +472,7 @@ class SMPLEngine:
         # Préparer les listes pour le fitting multi-view
         keypoints_list = [d['keypoints'] for d in image_data_list]
         shapes_list = [d['image'].shape[:2] for d in image_data_list]
+        masks_list = [d.get('segmentation_mask', None) for d in image_data_list] # Récupérer le masque
         
         try:
             # ⚡ CALIBRATION DE LA TAILLE - Préliminaire pour l'optimisation
@@ -451,6 +484,7 @@ class SMPLEngine:
             # Appel au nouveau moteur Multi-View avec le paramètre poids et focale
             smpl_params = self.fit_model_to_multiple_views(
                 keypoints_list, 
+                masks_list,
                 shapes_list, 
                 target_weight=target_weight, 
                 target_weight_interval=target_weight_interval,

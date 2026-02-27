@@ -198,7 +198,11 @@ def evaluate_agora(max_images: int = 100):
                     focal_px = (28/36) * 1280 # ~995.5
                 
                 # Step 3: Fitting with GT constraints and Perspective
-                image_data = [{'image': image_rgb, 'keypoints': keypoints}]
+                # Simuler 2 vues (Face + "Mock" Profil) car l'API exige 2 vues
+                image_data = [
+                    {'image': image_rgb, 'keypoints': keypoints, 'segmentation_mask': pose_res.get('segmentation_mask')},
+                    {'image': image_rgb, 'keypoints': keypoints, 'segmentation_mask': pose_res.get('segmentation_mask')}
+                ]
                 try:
                     # On utilise la taille et le poids RÉELS du sujet AGORA + Projection Perspective
                     res = smpl_engine.process_image(
