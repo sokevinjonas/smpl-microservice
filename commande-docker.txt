@@ -4,8 +4,11 @@ Redémarrer le conteneur pour appliquer mon correctif (le fichier est monté, do
 
 Cela va recréer l'image:  docker-compose up --build
 
+. Supprime le container problématique manuellement : sudo docker rm -f smpl-microservice
+
 Cette commande prend le contenu du script 
 
 evaluate_model.py qui est sur votre bureau) et l'envoie directement à Python à l'intérieur du conteneur Docker: 
 cat evaluate_model.py | docker exec -i smpl-microservice python -
 cat evaluate_shape_ssp3d.py | docker exec -i smpl-microservice python -
+sudo docker exec smpl-microservice python3 evaluate_agora.py

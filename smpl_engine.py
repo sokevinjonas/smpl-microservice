@@ -15,6 +15,7 @@ import torch
 import random
 from typing import Dict, Tuple
 from smplx import SMPL  # import direct de la classe
+from utils.volume_utils import calculate_mesh_volume_tensor
 
 class SMPLEngine:
     def __init__(self, model_dir: str = './models'):
@@ -151,6 +152,31 @@ class SMPLEngine:
             print(f"❌ Erreur lors de la génération du mesh: {e}")
             return None
 
+    def get_metrics_from_betas(self, betas_np: np.ndarray, gender: str = 'neutral') -> Dict:
+        """
+        Calcule la taille (m) et le poids (kg) théoriques pour un set de betas donné.
+        """
+        if self.smpl_model is None or self.current_gender != gender:
+            self.load_smpl_model(gender)
+            
+        with torch.no_grad():
+            betas = torch.from_numpy(betas_np).unsqueeze(0).float().to(self.device)
+            # Pose T-pose (zeros)
+            output = self.smpl_model(betas=betas, return_verts=True)
+            vertices = output.vertices[0]
+            
+            # 1. Height
+            y_min = torch.min(vertices[:, 1])
+            y_max = torch.max(vertices[:, 1])
+            height = (y_max - y_min).item()
+            
+            # 2. Weight
+            faces = torch.tensor(np.array(self.smpl_model.faces, dtype=np.int32), dtype=torch.long, device=self.device)
+            vol_m3 = calculate_mesh_volume_tensor(vertices, faces)
+            weight = vol_m3 * 1010.0 # Masse volumique humaine
+            
+        return {'height': height, 'weight': weight}
+
     def get_mesh_faces(self) -> np.ndarray:
         if self.smpl_model is None:
             return None
@@ -159,10 +185,14 @@ class SMPLEngine:
         except:
             return None
 
-    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], image_shapes: list[Tuple[int, int]]) -> Dict:
+
+    def fit_model_to_multiple_views(self, keypoints_list: list[np.ndarray], masks_list: list[np.ndarray], image_shapes: list[Tuple[int, int]], target_weight: float = None, target_weight_interval: Tuple[float, float] = None, target_height: float = None, focal_length: float = 1777.8) -> Dict:
         """
         Ajuste le modèle SMPL à plusieurs vues en optimisant pose et shape partagés.
-        Supposition: Vue 0 = Face, Vue 1 = Profil (approx 90 deg)
+        Suppositions: Vue 0 = Face, Vue 1 = Profil (approx 90 deg)
+        Aussi, target_weight (valeur exacte) ou target_weight_interval (min, max) peuvent être fournis pour contraindre le volume 3D.
+        target_height (m) est utilisé pour dimensionner correctement le volume lors du calcul du poids.
+        Focale: AGORA utilise du 50mm sur 1280x720 (~1777.8 px).
         """
         if self.smpl_model is None or not keypoints_list:
             return None
@@ -173,12 +203,17 @@ class SMPLEngine:
         # 1. Préparation des données pour chaque vue
         target_kps_list = []
         weights_list = []
+        masks_list = [] # SILHOUETTES
         
         # Indices (identiques pour toutes les vues)
-        mp_indices = [12, 11, 24, 23, 14, 13, 26, 25, 16, 15, 28, 27]
-        smpl_indices = [17, 16, 2, 1, 19, 18, 5, 4, 21, 20, 8, 7]
+        # Indices (identiques pour toutes les vues)
+        # Ajout du nez (MP 0 -> SMPL 24/15?) 
+        # Pour SMPL classique (24 joints), le head est joint 15. Nose est souvent approximé par Head.
+        mp_indices = [12, 11, 24, 23, 14, 13, 26, 25, 16, 15, 28, 27, 0]
+        smpl_indices = [17, 16, 2, 1, 19, 18, 5, 4, 21, 20, 8, 7, 15]
         
-        for kps in keypoints_list:
+        processed_masks = []
+        for k_idx, kps in enumerate(keypoints_list):
             # Conversion et Inversion Y (MediaPipe -> SMPL Y-up)
             t_kps = torch.tensor(kps[:, :2], dtype=torch.float32, device=self.device)
             t_kps[:, 1] = 1.0 - t_kps[:, 1]
@@ -187,6 +222,20 @@ class SMPLEngine:
             w = torch.tensor(kps[:, 2], dtype=torch.float32, device=self.device).unsqueeze(1)
             w = torch.clamp(w, 0.0, 1.0) # Sécurité (MediaPipe peut donner >1 ?)
             weights_list.append(w)
+            
+            # Precompute true mask bounds if a mask is provided
+            true_bounds = None
+            if masks_list and len(masks_list) > k_idx and masks_list[k_idx] is not None:
+                mask_v = masks_list[k_idx]
+                true_y, true_x = np.where(mask_v > 0)
+                if len(true_x) > 0:
+                    # Find min/max and normalize by image dimensions
+                    h, w = mask_v.shape
+                    min_x, max_x = true_x.min() / w, true_x.max() / w
+                    true_bounds = (min_x, max_x)
+            processed_masks.append(true_bounds)
+            
+        masks_list = processed_masks
 
         # 2. Paramètres PARTAGÉS (Le corps est unique)
         batch_size = 1
@@ -202,9 +251,14 @@ class SMPLEngine:
         # On initialise Vue 1 à 90 deg (1.57 rad) sur Y par défaut pour aider la convergence.
         
         global_orients = []
-        cam_scales = []
-        cam_transs = []
+        # Paramètres Perspective : On cherche la translation 3D relative (Z = distance)
+        # On garde une liste pour le multi-view même si ici c'est souvent la même caméra
+        cam_translations = []
         
+        # Focale par défaut pour AGORA (50mm sur 1280px)
+        # focal = (50/36)*1280 = 1777.8
+        f_px = focal_length
+        cx, cy = 0.5, 0.5 # Normalisé
         for i in range(num_views):
             # Rotation
             orient = torch.zeros(batch_size, 3, device=self.device, requires_grad=True)
@@ -215,19 +269,48 @@ class SMPLEngine:
                     orient[0, 1] = 1.57
             global_orients.append(orient)
             
-            # Caméra (Scale, Trans)
-            # Init: Scale 0.6, Centré (0.5, 0.5)
-            scale = torch.tensor([0.6], device=self.device, requires_grad=True)
-            trans = torch.tensor([[0.5, 0.5]], device=self.device, requires_grad=True)
-            cam_scales.append(scale)
-            cam_transs.append(trans)
+            # Caméra Perspective (Translation 3D)
+            # On initialise Z à 5.0 mètres (distance typique AGORA)
+            c_transl = torch.tensor([[0.0, 0.0, 5.0]], device=self.device, requires_grad=True)
+            cam_translations.append(c_transl)
             
-        # Optimiseur : Tous les paramètres
-        params = [betas, body_pose, transl] + global_orients + cam_scales + cam_transs
-        optimizer = torch.optim.Adam(params, lr=0.02)
+        # Optimiseur 1 : Calibration Camera/Position seulement
+        optimizer_init = torch.optim.Adam(global_orients + cam_translations + [transl], lr=0.05)
+        for i in range(50):
+            optimizer_init.zero_grad()
+            loss = 0.0
+            for v_idx in range(num_views):
+                output = self.smpl_model(global_orient=global_orients[v_idx], transl=transl, return_verts=False)
+                joints_3d = output.joints[0, smpl_indices, :]
+                
+                # Projection Perspective
+                # On ajoute la translation de caméra spécifique à la vue
+                points_cam = joints_3d + cam_translations[v_idx]
+                
+                # x = (X/Z)*f + cx, y = (Y/Z)*f + cy
+                # Ici tout est normalisé [0, 1], donc cx=0.5, cy=0.5
+                # La focale doit aussi être normalisée par la largeur de l'image (1280)
+                f_norm = f_px / 1280.0
+                
+                proj_x = (points_cam[:, 0] / points_cam[:, 2]) * f_norm + 0.5
+                # Perspective Y: points_cam[:, 1] est SMPL Y (vers le haut).
+                # Pour coller au format MediaPipe Y-down (qu'on a déjà inversé en 1-y),
+                # on projette directement. Plus Z est grand, plus Y_norm tend vers 0.5.
+                proj_y = (points_cam[:, 1] / points_cam[:, 2]) * (f_norm * (1280/720)) + 0.5
+                
+                pred_2d = torch.stack([proj_x, proj_y], dim=-1)
+                loss += torch.mean((pred_2d - target_kps_list[v_idx][mp_indices])**2)
+            loss.backward()
+            optimizer_init.step()
+
+        # Optimiseur 2 : Tous les paramètres
+        optimizer = torch.optim.Adam([
+            {'params': [betas], 'lr': 0.05},
+            {'params': [body_pose, transl] + global_orients + cam_translations, 'lr': 0.01}
+        ])
         
-        # Boucle d'optimisation
-        for i in range(150): # Un peu plus d'itérations pour le multi-view
+        # Boucle d'optimisation (Perspective)
+        for i in range(300):
             optimizer.zero_grad()
             total_loss = 0.0
             
@@ -240,18 +323,20 @@ class SMPLEngine:
                     body_pose=body_pose,
                     global_orient=global_orients[v_idx],
                     transl=transl,
-                    return_verts=False
+                    return_verts=True
                 )
                 joints_3d = output.joints
                 
                 # Projection Caméra de CETTE vue
-                joints_to_fit = joints_3d[:, smpl_indices, :]
-                joints_2d_proj = joints_to_fit[:, :, :2]
+                joints_to_fit = joints_3d[0, smpl_indices, :]
                 
-                # Appliquer params caméra de CETTE vue
-                s = torch.abs(cam_scales[v_idx])
-                t = cam_transs[v_idx]
-                joints_2d_proj = joints_2d_proj * s + t.unsqueeze(1)
+                # Appliquer params caméra Perspective
+                points_cam = joints_to_fit + cam_translations[v_idx]
+                f_norm = f_px / 1280.0
+                
+                proj_x = (points_cam[:, 0] / points_cam[:, 2]) * f_norm + 0.5
+                proj_y = (points_cam[:, 1] / points_cam[:, 2]) * (f_norm * (1280/720)) + 0.5
+                joints_2d_proj = torch.stack([proj_x, proj_y], dim=-1)
                 
                 # Loss Reprojection pour CETTE vue
                 targets = target_kps_list[v_idx][mp_indices]
@@ -259,12 +344,70 @@ class SMPLEngine:
                 
                 loss_view = torch.mean(w * (joints_2d_proj - targets)**2)
                 total_loss += loss_view * 100.0 # Poids reprojection
+                
+                # --- SILHOUETTE LOSS (Boundary Pulling) ---
+                if masks_list and len(masks_list) > v_idx and masks_list[v_idx] is not None:
+                    true_min_x, true_max_x = masks_list[v_idx]
+                    
+                    # Project vertices of the body model to 2D
+                    verts_cam = output.vertices[0] + cam_translations[v_idx]
+                    proj_x_v = (verts_cam[:, 0] / verts_cam[:, 2]) * f_norm + 0.5
+                    
+                    pred_min_x = proj_x_v.min()
+                    pred_max_x = proj_x_v.max()
+                    
+                    # Penalize bounding box width mismatch
+                    loss_silh = ((pred_min_x - true_min_x)**2 + (pred_max_x - true_max_x)**2)
+                    total_loss += loss_silh * 60.0 # Strong pull towards actual body width bounds
+                # --- END SILHOUETTE LOSS ---
             
             # Priors (Régularisation sur les paramètres partagés)
-            loss_beta = torch.mean(betas**2) * 0.1
-            loss_pose = torch.mean(body_pose**2) * 0.1
+            # On la baisse pour AGORA pour permettre aux betas de s'ajuster
+            loss_beta = torch.mean(betas**2) * 0.005
+            loss_pose = torch.mean(body_pose**2) * 0.01
             
-            loss = total_loss + loss_beta + loss_pose
+            # Contrainte de poids (Weight Loss)
+            loss_weight = 0.0
+            if (target_weight is not None and target_weight > 0) or target_weight_interval is not None:
+                # Générer le mesh pour la vue face (0) afin d'évaluer le volume
+                # Note: betas/body_pose sont partagés, donc le volume est invariant selon global_orient
+                output_vol = self.smpl_model(
+                    betas=betas,
+                    body_pose=body_pose,
+                    global_orient=global_orients[0],
+                    transl=transl,
+                    return_verts=True
+                )
+                verts_vol = output_vol.vertices
+                faces_vol = torch.tensor(np.array(self.smpl_model.faces, dtype=np.int32), dtype=torch.long, device=self.device)
+                
+                # Height scaling for correct volume calculation
+                vol_scale = 1.0
+                if target_height is not None and target_height > 0:
+                     y_min = torch.min(verts_vol[:, 1])
+                     y_max = torch.max(verts_vol[:, 1])
+                     current_height = y_max - y_min
+                     if current_height > 0:
+                         scale_factor = target_height / current_height
+                         vol_scale = scale_factor ** 3
+                
+                # Calculer le volume matriciel (tensoriel)
+                vol_m3 = calculate_mesh_volume_tensor(verts_vol, faces_vol)
+                # Estimer le poids à partir du volume basé sur la masse volumique humaine standard (1.01 kg/L)
+                estimated_weight = vol_m3 * vol_scale * 1010.0
+                
+                # Pénalité L2 forte sur l'erreur de poids
+                if target_weight_interval is not None:
+                     min_w, max_w = target_weight_interval
+                     # ReLU loss for interval: 0 penalty if within interval
+                     under_loss = torch.relu(min_w - estimated_weight)
+                     over_loss = torch.relu(estimated_weight - max_w)
+                     loss_weight = (under_loss**2 + over_loss**2) * 10.0
+                else:
+                     weight_diff = estimated_weight - target_weight
+                     loss_weight = torch.mean(weight_diff**2) * 10.0
+                
+            loss = total_loss + loss_beta + loss_pose + loss_weight
             
             loss.backward()
             optimizer.step()
@@ -313,10 +456,12 @@ class SMPLEngine:
         
         return vertices
         
-    def process_image(self, image_data_list: list[dict], gender: str = 'neutral', height: float = None) -> Dict:
+    def process_image(self, image_data_list: list[dict], gender: str = 'neutral', height: float = None, target_weight: float = None, target_weight_interval: Tuple[float, float] = None, focal_length: float = 1777.8) -> Dict:
         """
         Traite une ou plusieurs images (Multi-View).
         image_data_list: Liste de dicts {'image': np.array, 'keypoints': np.array}
+        target_weight: Poids corporel cible en kilogrammes.
+        target_weight_interval: Intervalle corporel (min, max).
         """
         # Changer de modèle si nécessaire
         if self.current_gender != gender:
@@ -327,10 +472,25 @@ class SMPLEngine:
         # Préparer les listes pour le fitting multi-view
         keypoints_list = [d['keypoints'] for d in image_data_list]
         shapes_list = [d['image'].shape[:2] for d in image_data_list]
+        masks_list = [d.get('segmentation_mask', None) for d in image_data_list] # Récupérer le masque
         
         try:
-            # Appel au nouveau moteur Multi-View
-            smpl_params = self.fit_model_to_multiple_views(keypoints_list, shapes_list)
+            # ⚡ CALIBRATION DE LA TAILLE - Préliminaire pour l'optimisation
+            target_height = height
+            if target_height is None or target_height <= 0:
+                target_height = 1.75 if gender == 'male' else 1.65
+                print(f"ℹ️ Pas de taille fournie. Utilisation standard pour {gender} : {target_height}m")
+            
+            # Appel au nouveau moteur Multi-View avec le paramètre poids et focale
+            smpl_params = self.fit_model_to_multiple_views(
+                keypoints_list, 
+                masks_list,
+                shapes_list, 
+                target_weight=target_weight, 
+                target_weight_interval=target_weight_interval,
+                target_height=target_height,
+                focal_length=focal_length
+            )
             
             if smpl_params is None: # Fallback
                  print("⚠️ Echec fitting Multi-View, utilisation paramètres par défaut (basé sur vue 1)")
@@ -343,15 +503,10 @@ class SMPLEngine:
 
         vertices = self.generate_mesh(smpl_params)
         
-        # ⚡ CALIBRATION DE LA TAILLE
-        # Si une taille cible est fournie (ou une taille par défaut), on redimensionne le mesh.
-        # Par défaut : Homme 1.75m, Femme 1.65m
-        if height is None or height <= 0:
-            height = 1.75 if gender == 'male' else 1.65
-            print(f"ℹ️ Pas de taille fournie. Utilisation standard pour {gender} : {height}m")
-            
-        if vertices is not None:
-             vertices = self.normalize_mesh_height(vertices, height)
+        # ⚡ CALIBRATION DE LA TAILLE (Appliqué au mesh final)
+        if target_height is not None and target_height > 0:
+             if vertices is not None:
+                  vertices = self.normalize_mesh_height(vertices, target_height)
 
         if vertices is None:
             return None
