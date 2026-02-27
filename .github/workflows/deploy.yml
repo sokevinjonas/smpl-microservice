@@ -43,18 +43,21 @@ jobs:
           script: |
             echo "--- Déploiement Démarré sur VPS ---"
 
+            TARGET_DIR="$HOME/projects/smpl-microservice"
+
             # Aller dans le dossier du projet ou le cloner
-            if [ -d "~/smpl-microservice" ]; then
-              cd ~/smpl-microservice
+            if [ -d "$TARGET_DIR" ]; then
+              cd "$TARGET_DIR"
               echo "🔄 Répertoire existant, récupération de la dernière version..."
               # S'assurer d'être sur la bonne branche et forcer le pull
               git fetch origin main
               git reset --hard origin/main
             else
               echo "⬇️ Clônage initial du dépôt..."
-              cd ~
+              mkdir -p "$HOME/projects"
+              cd "$HOME/projects"
               git clone https://github.com/sokevinjonas/smpl-microservice.git
-              cd ~/smpl-microservice
+              cd smpl-microservice
             fi
 
             # Lancer le script de déploiement interne qui gère Docker Compose
